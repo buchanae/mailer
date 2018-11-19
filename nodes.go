@@ -70,6 +70,10 @@ type statusCmd struct {
   attrs []string
 }
 
+type authCmd struct {
+  tag, authType, content string
+}
+
 func (*strNode) isNode() {}
 func (*numNode) isNode() {}
 func (*literalNode) isNode() {}
@@ -85,3 +89,4 @@ func (*selectCmd) isNode() {}
 func (*subscribeCmd) isNode() {}
 func (*unsubscribeCmd) isNode() {}
 func (*statusCmd) isNode() {}
+func (*authCmd) isNode() {}

@@ -233,6 +233,10 @@ func space(r *reader) {
 }
 
 func command(r *reader) node {
+  if r.peek(1) == "" {
+    return nil
+  }
+
   t := tag(r)
   if t == nil {
     fail("expected tag", r)
@@ -293,10 +297,34 @@ func command(r *reader) node {
 
   case "status":
     return status(r, t.tag)
+
+  case "authenticate":
+    return authenticate(r, t.tag)
   }
 
-  fail("unrecognized command", r)
+  fail(fmt.Sprintf("unrecognized command %q", k), r)
   return nil
+}
+
+func authenticate(r *reader, tag string) *authCmd {
+  return &authCmd{
+    tag: tag,
+    authType: "",
+  }
+}
+
+func atom(r *reader) (string, bool) {
+  str := ""
+
+  for {
+    c := r.peek(1)
+    if !contains(atomChar, c) {
+      break
+    }
+    r.take(1)
+    str += c
+  }
+  return str, str != 0
 }
 
 func keyword(r *reader, allowed ...string) (string, bool) {
