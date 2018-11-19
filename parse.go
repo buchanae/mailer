@@ -24,7 +24,9 @@ var digit = strings.Split("0123456789", "")
 
 var nzDigit = strings.Split("123456789", "")
 
-var base64Char = strings.Split("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ+/", "")
+var base64Char = strings.Split("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/", "")
+
+var keywordChar = strings.Split("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "")
 
 /*
 atom-specials = "(" / ")" / "{" / SP / CTL / list-wildcards /
@@ -307,9 +309,16 @@ func command(r *reader) node {
 }
 
 func authenticate(r *reader, tag string) *authCmd {
+  space(r)
+  a, ok := atom(r)
+  if !ok {
+    fail("expected atom", r)
+  }
+  crlf(r)
+
   return &authCmd{
     tag: tag,
-    authType: "",
+    authType: a,
   }
 }
 
@@ -324,13 +333,34 @@ func atom(r *reader) (string, bool) {
     r.take(1)
     str += c
   }
-  return str, str != 0
+  return str, len(str) != 0
 }
 
+func keywordStr(r *reader) (string, bool) {
+  str := ""
+
+  for {
+    c := r.peek(1)
+    if !contains(keywordChar, c) {
+      break
+    }
+    r.take(1)
+    str += c
+  }
+  return str, len(str) != 0
+}
+
+// TODO keyword always takes characters from the reader,
+//      even if it returns false on a disallowed keyword.
 func keyword(r *reader, allowed ...string) (string, bool) {
+  s, ok := keywordStr(r)
+  if !ok {
+    return "", false
+  }
+  s = strings.ToLower(s)
+
   for _, k := range allowed {
-    if strings.ToLower(r.peek(len(k))) == strings.ToLower(k) {
-      r.take(len(k))
+    if s == strings.ToLower(k) {
       return k, true
     }
   }
@@ -563,6 +593,7 @@ func base64(r *reader) string {
     if !contains(base64Char, c) {
       break
     }
+    r.take(1)
     str += c
   }
 

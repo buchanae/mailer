@@ -71,7 +71,7 @@ type statusCmd struct {
 }
 
 type authCmd struct {
-  tag, authType, content string
+  tag, authType string
 }
 
 func (*strNode) isNode() {}

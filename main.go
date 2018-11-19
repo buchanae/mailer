@@ -36,7 +36,7 @@ func handleConn(src io.ReadWriteCloser) {
   }
 
   // TODO better greeting
-  fmt.Fprintf(src, "* OK IMAP4rev1 server reader\r\n")
+  fmt.Fprintf(src, "* OK IMAP4rev1 server ready\r\n")
 
   defer func() {
     if e := recover(); e != nil {
@@ -48,8 +48,8 @@ func handleConn(src io.ReadWriteCloser) {
   t := io.TeeReader(src, all)
   r := newReader(t)
 
-mainloop:
   for {
+    log.Println("READ")
     x := command(r)
     if x == nil {
       break
@@ -60,7 +60,8 @@ mainloop:
     case *simpleCmd:
       switch z.name {
       case "capability":
-        wr("* CAPABILITY IMAP4rev1 AUTH=PLAIN")
+        //wr("* CAPABILITY IMAP4rev1 AUTH=PLAIN")
+        wr("* CAPABILITY IMAP4rev1")
         wr("%s OK CAPABILITY Completed", z.tag)
 
       case "logout":
@@ -76,16 +77,46 @@ mainloop:
       wr("%s OK LOGIN Completed", z.tag)
 
     case *listCmd:
-      if z.query == "" {
+      switch z.query {
+      case "":
         wr(`* LIST (\Noselect) "/" ""`)
         wr(`%s OK LIST Completed`, z.tag)
-        continue mainloop
+      case "*":
+        wr(`* LIST () "/" "testone"`)
+        wr(`* LIST () "/" "testtwo"`)
+        wr(`%s OK LIST Completed`, z.tag)
       }
 
+    case *authCmd:
+      if z.authType == "PLAIN" {
+        wr("+")
+        tok := base64(r)
+        crlf(r)
+        log.Println("AUTH TOK", tok)
+      }
+
+    case *createCmd:
+      wr(`%s OK CREATE Completed`, z.tag)
+
     case *lsubCmd:
+      wr(`* LSUB () "/" "testone"`)
+      wr(`* LSUB () "/" "testtwo"`)
+      wr(`%s OK LSUB Completed`, z.tag)
+
+    case *examineCmd:
+      wr(`* 10 EXISTS`)
+      wr(`* 5 RECENT`)
+      wr(`* FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
+      wr(`%s OK [READ-ONLY] EXAMINE Completed`, z.tag)
+
+    case *statusCmd:
+      wr(`* STATUS %s (MESSAGES 10 UIDVALIDITY 3857529045 UIDNEXT 11 UNSEEN 1)`, z.mailbox)
+      wr(`%s OK STATUS Completed`, z.tag)
 
     case *selectCmd:
-      wr(`* 0 EXISTS`)
+      wr(`* 10 EXISTS`)
+      wr(`* 5 RECENT`)
+      wr(`* FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
       wr(`%s OK [READ-ONLY] SELECT Completed`, z.tag)
     }
   }
