@@ -734,10 +734,20 @@ func search(r *reader, tag string) *searchCmd {
   }
 
   if discard(r, ')') {
+    var keys []searchKeyNode
     for {
+      sk := searchKey(r)
+      keys = append(keys, sk)
+      if !discard(r, ' ') {
+        break
+      }
     }
+    require(r, ")")
+    return &searchCmd{charset: charset, keys: keys}
   }
 
+  sk := searchKey(r)
+  return &searchCmd{charset: charset, keys: []searchKeyNode{sk}}
 }
 
 func searchKey(r *reader) searchKeyNode {
@@ -746,9 +756,12 @@ func searchKey(r *reader) searchKeyNode {
     "subject", "text", "to", "unanswered", "undeleted", "unflagged", "unkeyword",
     "unseen", "draft", "header", "larger", "not", "or", "sentbefore", "senton",
     "sentsince", "smaller", "uid", "undraft")
+  if !ok {
+    fail("expected search key keyword", r)
+  }
 
   switch k {
-  case "all", "answered", "deleted", "flagged", "new", "old", "recent", "seen"
+  case "all", "answered", "deleted", "flagged", "new", "old", "recent", "seen",
        "unanswered", "undeleted", "unflagged", "unseen", "draft", "undraft":
     return &simpleSearchKey{k}
 
@@ -778,7 +791,6 @@ func searchKey(r *reader) searchKeyNode {
     arg := requireAstring(r)
     return &toSearchKey{arg}
   case "unkeyword":
-  case "unseen":
   case "header":
   case "larger":
   case "not":
@@ -796,6 +808,8 @@ func searchKey(r *reader) searchKeyNode {
   case "uid":
   }
   // TODO sequence-set
+  fail("expected search key", r)
+  return nil
 }
 
 func nstring(r *reader) *nstringNode {
