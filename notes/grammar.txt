@@ -1,13 +1,3 @@
-nil             = "NIL"
-
-nstring         = string / nil
-
-nz-number       = digit-nz *DIGIT
-                    ; Non-zero unsigned 32-bit integer
-                    ; (0 < n < 4,294,967,296)
-
-
-
 
 
 address         = "(" addr-name SP addr-adl SP addr-mailbox SP
@@ -39,21 +29,6 @@ addr-name       = nstring
 append          = "APPEND" SP mailbox [SP flag-list] [SP date-time] SP
                   literal
 
-
-
-authenticate    = "AUTHENTICATE" SP auth-type *(CRLF base64)
-
-auth-type       = atom
-                    ; Defined by [SASL]
-
-
-
-base64          = *(4base64-char) [base64-terminal]
-
-base64-char     = ALPHA / DIGIT / "+" / "/"
-                    ; Case-sensitive
-
-base64-terminal = (2base64-char "==") / (3base64-char "=")
 
 
 
@@ -120,35 +95,14 @@ body-type-text  = media-text SP body-fields SP body-fld-lines
 
 
 
-capability      = ("AUTH=" auth-type) / atom
-                    ; New capabilities MUST begin with "X" or be
-                    ; registered with IANA as standard or
-                    ; standards-track
-
-capability-data = "CAPABILITY" *(SP capability) SP "IMAP4rev1"
-                  *(SP capability)
-                    ; Servers MUST implement the STARTTLS, AUTH=PLAIN,
-                    ; and LOGINDISABLED capabilities
-                    ; Servers which offer RFC 1730 compatibility MUST
-                    ; list "IMAP4" as the first capability.
-
-CHAR8           = %x01-ff
-                    ; any OCTET except NUL, %x00
-
-
-
 command-any     =  x-command
-command-auth    = append / status
+command-auth    = append
 command-nonauth = authenticate
-command-select  = copy / fetch / store / uid / search
+command-select  = fetch / store / uid / search
                   ; Valid only when in Selected state
 
 
 
-
-
-
-copy            = "COPY" SP sequence-set SP mailbox
 
 
 
@@ -170,6 +124,18 @@ date-year       = 4DIGIT
 
 date-time       = DQUOTE date-day-fixed "-" date-month "-" date-year
                   SP time SP zone DQUOTE
+
+time            = 2DIGIT ":" 2DIGIT ":" 2DIGIT
+                    ; Hours minutes seconds
+
+zone            = ("+" / "-") 4DIGIT
+                    ; Signed four-digit value of hhmm representing
+                    ; hours and minutes east of Greenwich (that is,
+                    ; the amount that the given time differs from
+                    ; Universal Time).  Subtracting the timezone
+                    ; from the given time will give the UT form.
+                    ; The Universal Time zone is "+0000".
+
 
 
 
@@ -200,37 +166,6 @@ env-to          = "(" 1*address ")" / nil
 
 
 
-
-
-fetch           = "FETCH" SP sequence-set SP ("ALL" / "FULL" / "FAST" /
-                  fetch-att / "(" fetch-att *(SP fetch-att) ")")
-
-fetch-att       = "ENVELOPE" / "FLAGS" / "INTERNALDATE" /
-                  "RFC822" [".HEADER" / ".SIZE" / ".TEXT"] /
-                  "BODY" ["STRUCTURE"] / "UID" /
-                  "BODY" section ["<" number "." nz-number ">"] /
-                  "BODY.PEEK" section ["<" number "." nz-number ">"]
-
-
-flag            = "\Answered" / "\Flagged" / "\Deleted" /
-                  "\Seen" / "\Draft" / flag-keyword / flag-extension
-                    ; Does not include "\Recent"
-
-flag-extension  = "\" atom
-                    ; Future expansion.  Client implementations
-                    ; MUST accept flag-extension flags.  Server
-                    ; implementations MUST NOT generate
-                    ; flag-extension flags except as defined by
-                    ; future standard or standards-track
-                    ; revisions of this specification.
-
-flag-fetch      = flag / "\Recent"
-
-flag-keyword    = atom
-
-flag-list       = "(" [flag *(SP flag)] ")"
-
-flag-perm       = flag / "\*"
 
 
 
@@ -378,60 +313,21 @@ section-spec    = section-msgtext / (section-part ["." section-text])
 section-text    = section-msgtext / "MIME"
                     ; text other than actual body part (headers, etc.)
 
-seq-number      = nz-number / "*"
-                    ; message sequence number (COPY, FETCH, STORE
-                    ; commands) or unique identifier (UID COPY,
-                    ; UID FETCH, UID STORE commands).
-                    ; * represents the largest number in use.  In
-                    ; the case of message sequence numbers, it is
-                    ; the number of messages in a non-empty mailbox.
-                    ; In the case of unique identifiers, it is the
-                    ; unique identifier of the last message in the
-                    ; mailbox or, if the mailbox is empty, the
-                    ; mailbox's current UIDNEXT value.
-                    ; The server should respond with a tagged BAD
-                    ; response to a command that uses a message
-                    ; sequence number greater than the number of
-                    ; messages in the selected mailbox.  This
-                    ; includes "*" if the selected mailbox is empty.
 
-seq-range       = seq-number ":" seq-number
-                    ; two seq-number values and all values between
-                    ; these two regardless of order.
-                    ; Example: 2:4 and 4:2 are equivalent and indicate
-                    ; values 2, 3, and 4.
-                    ; Example: a unique identifier sequence range of
-                    ; 3291:* includes the UID of the last message in
-                    ; the mailbox, even if that value is less than 3291.
-
-sequence-set    = (seq-number / seq-range) *("," sequence-set)
-                    ; set of seq-number values, regardless of order.
-                    ; Servers MAY coalesce overlaps and/or execute the
-                    ; sequence in any order.
-                    ; Example: a message sequence number set of
-                    ; 2,4:7,9,12:* for a mailbox with 15 messages is
-                    ; equivalent to 2,4,5,6,7,9,12,13,14,15
-                    ; Example: a message sequence number set of *:4,5:7
-                    ; for a mailbox with 10 messages is equivalent to
-                    ; 10,9,8,7,6,5,4,5,6,7 and MAY be reordered and
-                    ; overlap coalesced to be 4,5,6,7,8,9,10.
 
 
 
 status-att      = "MESSAGES" / "RECENT" / "UIDNEXT" / "UIDVALIDITY" /
                   "UNSEEN"
 
-
-
 status-att-list =  status-att SP number *(SP status-att SP number)
 
-store           = "STORE" SP sequence-set SP store-att-flags
 
-store-att-flags = (["+" / "-"] "FLAGS" [".SILENT"]) SP
-                  (flag-list / (flag *(SP flag)))
 
-time            = 2DIGIT ":" 2DIGIT ":" 2DIGIT
-                    ; Hours minutes seconds
+
+
+
+
 
 uid             = "UID" SP (copy / fetch / search / store)
                     ; Unique identifiers used instead of message
@@ -442,10 +338,3 @@ uniqueid        = nz-number
 
 x-command       = "X" atom <experimental command arguments>
 
-zone            = ("+" / "-") 4DIGIT
-                    ; Signed four-digit value of hhmm representing
-                    ; hours and minutes east of Greenwich (that is,
-                    ; the amount that the given time differs from
-                    ; Universal Time).  Subtracting the timezone
-                    ; from the given time will give the UT form.
-                    ; The Universal Time zone is "+0000".

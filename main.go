@@ -25,6 +25,15 @@ func main() {
   }
 }
 
+type account struct {
+  mailboxes map[string]mailbox
+}
+
+type mailbox struct {
+  name string
+  uidnext, uidvalid uint32
+}
+
 func handleConn(src io.ReadWriteCloser) {
   log.Println("connection opened")
   all := &bytes.Buffer{}
@@ -35,7 +44,6 @@ func handleConn(src io.ReadWriteCloser) {
     fmt.Fprint(src, "\r\n")
   }
 
-  // TODO better greeting
   fmt.Fprintf(src, "* OK IMAP4rev1 server ready\r\n")
 
   defer func() {
@@ -49,6 +57,8 @@ func handleConn(src io.ReadWriteCloser) {
   r := newReader(t)
 
   for {
+    all.Reset()
+
     log.Println("READ")
     x := command(r)
     if x == nil {
@@ -76,17 +86,6 @@ func handleConn(src io.ReadWriteCloser) {
     case *loginCmd:
       wr("%s OK LOGIN Completed", z.tag)
 
-    case *listCmd:
-      switch z.query {
-      case "":
-        wr(`* LIST (\Noselect) "/" ""`)
-        wr(`%s OK LIST Completed`, z.tag)
-      case "*":
-        wr(`* LIST () "/" "testone"`)
-        wr(`* LIST () "/" "testtwo"`)
-        wr(`%s OK LIST Completed`, z.tag)
-      }
-
     case *authCmd:
       if z.authType == "PLAIN" {
         wr("+")
@@ -98,10 +97,25 @@ func handleConn(src io.ReadWriteCloser) {
     case *createCmd:
       wr(`%s OK CREATE Completed`, z.tag)
 
+    case *listCmd:
+      switch z.query {
+      case "":
+        wr(`* LIST (\Noselect) "/" ""`)
+        wr(`%s OK LIST Completed`, z.tag)
+      case "*":
+        wr(`* LIST () "/" "testone"`)
+        wr(`* LIST () "/" "testtwo"`)
+        wr(`%s OK LIST Completed`, z.tag)
+      }
+
     case *lsubCmd:
       wr(`* LSUB () "/" "testone"`)
       wr(`* LSUB () "/" "testtwo"`)
       wr(`%s OK LSUB Completed`, z.tag)
+
+    case *statusCmd:
+      wr(`* STATUS %s (MESSAGES 10 UIDVALIDITY 3857529045 UIDNEXT 11 UNSEEN 1)`, z.mailbox)
+      wr(`%s OK STATUS Completed`, z.tag)
 
     case *examineCmd:
       wr(`* 10 EXISTS`)
@@ -109,15 +123,18 @@ func handleConn(src io.ReadWriteCloser) {
       wr(`* FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
       wr(`%s OK [READ-ONLY] EXAMINE Completed`, z.tag)
 
-    case *statusCmd:
-      wr(`* STATUS %s (MESSAGES 10 UIDVALIDITY 3857529045 UIDNEXT 11 UNSEEN 1)`, z.mailbox)
-      wr(`%s OK STATUS Completed`, z.tag)
-
     case *selectCmd:
       wr(`* 10 EXISTS`)
       wr(`* 5 RECENT`)
       wr(`* FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
       wr(`%s OK [READ-ONLY] SELECT Completed`, z.tag)
+
+    case *fetchCmd:
+      log.Println("fetch")
+
+    case *copyCmd:
+
+    case *storeCmd:
     }
   }
 }

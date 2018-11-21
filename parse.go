@@ -1,14 +1,14 @@
 package main
 
 import (
-  "fmt"
-  "log"
-  "strings"
-  "strconv"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
 )
 
 func init() {
-  log.SetFlags(0)
+	log.SetFlags(0)
 }
 
 // char is any 7-bit US-ASCII character, excluding NUL.
@@ -22,11 +22,9 @@ var quotedTextChar []string
 
 var digit = strings.Split("0123456789", "")
 
-var nzDigit = strings.Split("123456789", "")
-
 var base64Char = strings.Split("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/", "")
 
-var keywordChar = strings.Split("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "")
+var keywordChar = strings.Split("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.", "")
 
 /*
 atom-specials = "(" / ")" / "{" / SP / CTL / list-wildcards /
@@ -53,562 +51,774 @@ var tagChar []string
 var listChar []string
 
 func init() {
-  for i := 1; i < 128; i++ {
-    char = append(char, string(i))
-  }
+	for i := 1; i < 128; i++ {
+		char = append(char, string(i))
+	}
 
-  for i := 0; i < 32; i++ {
-    ctrlChar = append(ctrlChar, string(i))
-  }
-  ctrlChar = append(ctrlChar, "\x7f")
+	for i := 0; i < 32; i++ {
+		ctrlChar = append(ctrlChar, string(i))
+	}
+	ctrlChar = append(ctrlChar, "\x7f")
 
-  atomSpecials = strings.Split(`(){ %*"\]`, "")
-  atomSpecials = append(atomSpecials, ctrlChar...)
+	atomSpecials = strings.Split(`(){ %*"\]`, "")
+	atomSpecials = append(atomSpecials, ctrlChar...)
 
-  atomChar = except(char, atomSpecials...)
+	atomChar = except(char, atomSpecials...)
 
-  textChar = except(char, "\r", "\n")
-  quotedTextChar = except(textChar, `\`, `"`)
-  astringChar = except(atomChar, "]")
-  tagChar = except(astringChar, "+")
+	textChar = except(char, "\r", "\n")
+	quotedTextChar = except(textChar, `\`, `"`)
+	astringChar = except(atomChar, "]")
+	tagChar = except(astringChar, "+")
 
-  listChar = append(listChar, atomChar...)
-  listChar = append(listChar, "%", "*", "]")
+	listChar = append(listChar, atomChar...)
+	listChar = append(listChar, "%", "*", "]")
+}
+
+func takeChars(r *reader, chars []string) (string, bool) {
+	str := ""
+
+	for {
+		c := r.peek(1)
+		if !contains(chars, c) {
+			break
+		}
+		r.take(1)
+		str += c
+	}
+	return str, len(str) != 0
+}
+
+func requireAstring(r *reader) string {
+	s := astring(r)
+	if s == nil {
+		fail("expected astring", r)
+	}
+	return s.str
 }
 
 // QUOTED-CHAR = <any TEXT-CHAR except quoted-specials> /
 //               "\" quoted-specials
 func quotedChar(r *reader) string {
-  c := r.peek(1)
-  if contains(quotedTextChar, c) {
-    r.take(1)
-    return c
-  }
+	c := r.peek(1)
+	if contains(quotedTextChar, c) {
+		r.take(1)
+		return c
+	}
 
-  c = r.peek(2)
-  if c == `\"` || c == `\\` {
-    r.take(2)
-    return c[1:]
-  }
-  return ""
+	// TODO this might be a problem if input ends at peek(1)
+	c = r.peek(2)
+	if c == `\"` || c == `\\` {
+		r.take(2)
+		return c[1:]
+	}
+	return ""
 }
 
 // quoted = DQUOTE *QUOTED-CHAR DQUOTE
 func quoted(r *reader) *strNode {
-  if !takeStart(r, `"`) {
-    return nil
-  }
+	if !takeStart(r, `"`) {
+		return nil
+	}
 
-  str := ""
-  for {
-    c := r.peek(1)
-    if c == `"` {
-      r.take(1)
-      return &strNode{str}
-    }
-    c = quotedChar(r)
-    if c == "" {
-      fail("missing terminal double quote", r)
-    }
-    str += c
-  }
+	str := ""
+	for {
+		c := r.peek(1)
+		if c == `"` {
+			r.take(1)
+			return &strNode{str}
+		}
+		c = quotedChar(r)
+		if c == "" {
+			fail("missing terminal double quote", r)
+		}
+		str += c
+	}
 }
 
 // number = 1*DIGIT
 // Unsigned 32-bit integer (0 <= n < 4,294,967,296)
 func number(r *reader) *numNode {
-  str := ""
-  for {
-    c := r.peek(1)
-    if !contains(digit, c) {
-      break
-    }
-    r.take(1)
-    str += c
-  }
-  if len(str) == 0 {
-    return nil
-  }
-  i, err := strconv.ParseUint(str, 10, 32)
-  if err != nil {
-    m := fmt.Sprintf("converting %q to uint32: %s", str, err)
-    fail(m, r)
-  }
-  return &numNode{int(i)}
+	str, ok := takeChars(r, digit)
+	if !ok {
+		return nil
+	}
+
+	i, err := strconv.ParseUint(str, 10, 32)
+	if err != nil {
+		m := fmt.Sprintf("converting %q to uint32: %s", str, err)
+		fail(m, r)
+	}
+	return &numNode{int(i)}
+}
+
+// non-zero unsigned 32-bit integer (0 < n < 4,294,967,296)
+func nzNumber(r *reader) *numNode {
+	if r.peek(1) == "0" {
+		fail("expected non-zero number", r)
+	}
+	return number(r)
 }
 
 // literal = "{" number "}" CRLF *CHAR8
 func literal(r *reader) *literalNode {
-  if !takeStart(r, "{") {
-    return nil
-  }
-  num := number(r)
-  if num == nil {
-    fail("failed to parse character count from literal", r)
-  }
-  if r.peek(1) != "}" {
-    fail("expected }", r)
-  }
-  r.take(1)
+	if !takeStart(r, "{") {
+		return nil
+	}
+	num := number(r)
+	if num == nil {
+		fail("failed to parse character count from literal", r)
+	}
+	if r.peek(1) != "}" {
+		fail("expected }", r)
+	}
+	r.take(1)
 
-  crlf(r)
-  // TODO need to disallow NUL \x00
-  s := r.peek(num.num)
-  r.take(num.num)
+	crlf(r)
+	// TODO need to disallow NUL \x00
+	s := r.peek(num.num)
+	r.take(num.num)
 
-  return &literalNode{
-    size:    num.num,
-    content: s,
-  }
+	return &literalNode{
+		size:    num.num,
+		content: s,
+	}
 }
 
 func crlf(r *reader) {
-  if r.peek(2) != "\r\n" {
-    fail("expect CRLF", r)
-  }
-  r.take(2)
+	if r.peek(2) != "\r\n" {
+		fail("expect CRLF", r)
+	}
+	r.take(2)
 }
 
-func string_(r *reader) *strNode {
-  q := quoted(r)
-  if q != nil {
-    return q
-  }
+func space(r *reader) {
+	if r.peek(1) != " " {
+		fail("expected space", r)
+	}
+	r.take(1)
+}
 
-  l := literal(r)
-  if l != nil {
-    return &strNode{str: l.content}
-  }
-  return nil
+func string_(r *reader) (string, bool) {
+	q := quoted(r)
+	if q != nil {
+		return q.str, true
+	}
+
+	l := literal(r)
+	if l == nil {
+		return "", false
+	}
+	return l.content, true
 }
 
 func tag(r *reader) *tagNode {
-  tag := ""
-
-  for {
-    c := r.peek(1)
-    if !contains(tagChar, c) {
-      break
-    }
-    r.take(1)
-    tag += c
-  }
-
-  if len(tag) == 0 {
-    return nil
-  }
-  return &tagNode{tag: tag}
+	tag, ok := takeChars(r, tagChar)
+	if !ok {
+		return nil
+	}
+	return &tagNode{tag: tag}
 }
 
 // astring = 1*ASTRING-CHAR / string
 func astring(r *reader) *strNode {
-  s := astring1(r)
-  if s != nil {
-    return s
-  }
-  return string_(r)
+	s, ok := takeChars(r, astringChar)
+	if ok {
+		return &strNode{s}
+	}
+	s, ok = string_(r)
+	if ok {
+		return &strNode{s}
+	}
+	return nil
 }
 
-func astring1(r *reader) *strNode {
-  str := ""
-
-  for {
-    c := r.peek(1)
-    if !contains(astringChar, c) {
-      break
-    }
-    r.take(1)
-    str += c
-  }
-
-  if len(str) == 0 {
-    return nil
-  }
-  return &strNode{str}
-}
-
-func space(r *reader) {
-  if r.peek(1) != " " {
-    fail("expected space", r)
-  }
-  r.take(1)
-}
-
-func command(r *reader) node {
-  if r.peek(1) == "" {
-    return nil
-  }
-
-  t := tag(r)
-  if t == nil {
-    fail("expected tag", r)
-  }
-  space(r)
-
-  k, ok := keyword(r,
-    "capability", "logout", "noop",
-    "append", "create", "delete", "examine", "list",
-    "lsub", "rename", "select", "status", "subscribe",
-    "unsubscribe",
-    "login", "authenticate", "starttls",
-    "check", "close", "expunge", "copy", "fetch", "store",
-    "uid", "search",
-  )
-  if !ok {
-    fail("expected command keyword", r)
-  }
-
-  switch k {
-  case "capability", "logout", "noop", "starttls", "check",
-       "close", "expunge":
-    crlf(r)
-    return &simpleCmd{
-      tag: t.tag,
-      name: k,
-    }
-
-  case "create":
-    return create(r, t.tag)
-
-  case "delete":
-    return delete_(r, t.tag)
-
-  case "examine":
-    return examine(r, t.tag)
-
-  case "list":
-    return list(r, t.tag)
-
-  case "lsub":
-    return lsub(r, t.tag)
-
-  case "rename":
-    return rename(r, t.tag)
-
-  case "select":
-    return select_(r, t.tag)
-
-  case "subscribe":
-    return subscribe(r, t.tag)
-
-  case "unsubscribe":
-    return unsubscribe(r, t.tag)
-
-  case "login":
-    return login(r, t.tag)
-
-  case "status":
-    return status(r, t.tag)
-
-  case "authenticate":
-    return authenticate(r, t.tag)
-  }
-
-  fail(fmt.Sprintf("unrecognized command %q", k), r)
-  return nil
-}
-
-func authenticate(r *reader, tag string) *authCmd {
-  space(r)
-  a, ok := atom(r)
+func atom(r *reader) string {
+  a, ok := takeChars(r, atomChar)
   if !ok {
     fail("expected atom", r)
   }
-  crlf(r)
-
-  return &authCmd{
-    tag: tag,
-    authType: a,
-  }
-}
-
-func atom(r *reader) (string, bool) {
-  str := ""
-
-  for {
-    c := r.peek(1)
-    if !contains(atomChar, c) {
-      break
-    }
-    r.take(1)
-    str += c
-  }
-  return str, len(str) != 0
+  return a
 }
 
 func keywordStr(r *reader) (string, bool) {
-  str := ""
+	return takeChars(r, keywordChar)
+}
 
-  for {
-    c := r.peek(1)
-    if !contains(keywordChar, c) {
-      break
-    }
-    r.take(1)
-    str += c
-  }
-  return str, len(str) != 0
+func command(r *reader) node {
+	t := tag(r)
+	if t == nil {
+		fail("expected tag", r)
+	}
+	space(r)
+
+	k, ok := keyword(r,
+		"capability", "logout", "noop",
+		"append", "create", "delete", "examine", "list",
+		"lsub", "rename", "select", "status", "subscribe",
+		"unsubscribe",
+		"login", "authenticate", "starttls",
+		"check", "close", "expunge", "copy", "fetch", "store",
+		"uid", "search",
+	)
+	if !ok {
+		fail("expected command keyword", r)
+	}
+
+	switch k {
+	case "capability", "logout", "noop", "starttls", "check",
+		"close", "expunge":
+		crlf(r)
+		return &simpleCmd{
+			tag:  t.tag,
+			name: k,
+		}
+
+	case "create":
+		return create(r, t.tag)
+	case "delete":
+		return delete_(r, t.tag)
+	case "examine":
+		return examine(r, t.tag)
+	case "list":
+		return list(r, t.tag)
+	case "lsub":
+		return lsub(r, t.tag)
+	case "rename":
+		return rename(r, t.tag)
+	case "select":
+		return select_(r, t.tag)
+	case "subscribe":
+		return subscribe(r, t.tag)
+	case "unsubscribe":
+		return unsubscribe(r, t.tag)
+	case "login":
+		return login(r, t.tag)
+	case "status":
+		return status(r, t.tag)
+	case "authenticate":
+		return authenticate(r, t.tag)
+	case "fetch":
+		return fetch(r, t.tag)
+	case "copy":
+		return copy_(r, t.tag)
+	case "store":
+		return store(r, t.tag)
+	}
+
+	fail(fmt.Sprintf("unrecognized command %q", k), r)
+	return nil
+}
+
+func authenticate(r *reader, tag string) *authCmd {
+	space(r)
+	a := atom(r)
+	crlf(r)
+
+	return &authCmd{
+		tag:      tag,
+		authType: a,
+	}
 }
 
 // TODO keyword always takes characters from the reader,
 //      even if it returns false on a disallowed keyword.
 func keyword(r *reader, allowed ...string) (string, bool) {
-  s, ok := keywordStr(r)
-  if !ok {
-    return "", false
-  }
-  s = strings.ToLower(s)
+	s, ok := keywordStr(r)
+	if !ok {
+		return "", false
+	}
+	s = strings.ToLower(s)
 
-  for _, k := range allowed {
-    if s == strings.ToLower(k) {
-      return k, true
-    }
-  }
-  return "", false
+	for _, k := range allowed {
+		if s == strings.ToLower(k) {
+			return s, true
+		}
+	}
+	return "", false
 }
 
 func login(r *reader, tag string) *loginCmd {
-  space(r)
+	space(r)
+	user := requireAstring(r)
+	space(r)
+	pass := requireAstring(r)
+	crlf(r)
 
-  user := astring(r)
-  if user == nil {
-    fail("parsing username, expected astring", r)
-  }
-
-  space(r)
-
-  pass := astring(r)
-  if pass == nil {
-    fail("parsing password, expected astring", r)
-  }
-
-  crlf(r)
-
-  return &loginCmd{
-    tag: tag,
-    user: user.str,
-    pass: pass.str,
-  }
+	return &loginCmd{
+		tag:  tag,
+		user: user,
+		pass: pass,
+	}
 }
 
 func create(r *reader, tag string) *createCmd {
-  space(r)
-
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  crlf(r)
-  return &createCmd{tag: tag, mailbox: s.str}
+	space(r)
+	mailbox := requireAstring(r)
+	crlf(r)
+	return &createCmd{tag: tag, mailbox: mailbox}
 }
 
 func delete_(r *reader, tag string) *deleteCmd {
-  space(r)
-
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  crlf(r)
-  return &deleteCmd{tag: tag, mailbox: s.str}
+	space(r)
+	mailbox := requireAstring(r)
+	crlf(r)
+	return &deleteCmd{tag: tag, mailbox: mailbox}
 }
 
 func examine(r *reader, tag string) *examineCmd {
-  space(r)
-
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  crlf(r)
-  return &examineCmd{tag: tag, mailbox: s.str}
-}
-
-func list(r *reader, tag string) *listCmd {
-  space(r)
-
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  space(r)
-
-  q, ok := listMailbox(r)
-  if !ok {
-    fail("parsing list query", r)
-  }
-
-  crlf(r)
-  return &listCmd{tag: tag, mailbox: s.str, query: q}
-}
-
-func lsub(r *reader, tag string) *lsubCmd {
-  l := list(r, tag)
-  if l == nil {
-    return nil
-  }
-  return &lsubCmd{tag: l.tag, mailbox: l.mailbox, query: l.query}
-}
-
-func listMailbox(r *reader) (string, bool) {
-  s, ok := listMailbox1(r)
-  if ok {
-    return s, true
-  }
-  n := string_(r)
-  if n == nil {
-    return "", false
-  }
-  return n.str, true
-}
-
-func listMailbox1(r *reader) (string, bool) {
-  str := ""
-
-  for {
-    c := r.peek(1)
-    if !contains(listChar, c) {
-      break
-    }
-    r.take(1)
-    str += c
-  }
-  return str, len(str) != 0
+	space(r)
+	mailbox := requireAstring(r)
+	crlf(r)
+	return &examineCmd{tag: tag, mailbox: mailbox}
 }
 
 func rename(r *reader, tag string) *renameCmd {
-  space(r)
-
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  space(r)
-
-  t := astring(r)
-  if t == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  crlf(r)
-  return &renameCmd{tag: tag, from: s.str, to: t.str}
+	space(r)
+	from := requireAstring(r)
+	space(r)
+	to := requireAstring(r)
+	crlf(r)
+	return &renameCmd{tag: tag, from: from, to: to}
 }
 
 func select_(r *reader, tag string) *selectCmd {
-  space(r)
-
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  crlf(r)
-  return &selectCmd{tag: tag, mailbox: s.str}
+	space(r)
+	mailbox := requireAstring(r)
+	crlf(r)
+	return &selectCmd{tag: tag, mailbox: mailbox}
 }
 
 func subscribe(r *reader, tag string) *subscribeCmd {
-  space(r)
-
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  crlf(r)
-  return &subscribeCmd{tag: tag, mailbox: s.str}
+	space(r)
+	mailbox := requireAstring(r)
+	crlf(r)
+	return &subscribeCmd{tag: tag, mailbox: mailbox}
 }
 
 func unsubscribe(r *reader, tag string) *unsubscribeCmd {
-  space(r)
-
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
-
-  crlf(r)
-  return &unsubscribeCmd{tag: tag, mailbox: s.str}
+	space(r)
+	mailbox := requireAstring(r)
+	crlf(r)
+	return &unsubscribeCmd{tag: tag, mailbox: mailbox}
 }
 
+func list(r *reader, tag string) *listCmd {
+	space(r)
+	mailbox := requireAstring(r)
+	space(r)
+
+	q, ok := listMailbox(r)
+	if !ok {
+		fail("parsing list query", r)
+	}
+
+	crlf(r)
+	return &listCmd{tag: tag, mailbox: mailbox, query: q}
+}
+
+func lsub(r *reader, tag string) *lsubCmd {
+	l := list(r, tag)
+	return &lsubCmd{tag: l.tag, mailbox: l.mailbox, query: l.query}
+}
+
+func listMailbox(r *reader) (string, bool) {
+	s, ok := listMailbox1(r)
+	if ok {
+		return s, true
+	}
+	return string_(r)
+}
+
+func listMailbox1(r *reader) (string, bool) {
+	return takeChars(r, listChar)
+}
+
+func require(r *reader, s string) {
+  if r.peek(len(s)) != s {
+    fail("expected " + s, r)
+  }
+  r.take(len(s))
+}
+
+func discard(r *reader, s rune) bool {
+  if r.peek(1) == string(s) {
+    r.take(1)
+    return true
+  }
+  return false
+}
+
+
 func status(r *reader, tag string) *statusCmd {
-  space(r)
+	space(r)
+  mailbox := requireAstring(r)
+	space(r)
+  require(r, "(")
 
-  s := astring(r)
-  if s == nil {
-    fail("parsing mailbox, expected astring", r)
-  }
+	k, ok := keyword(r, "messages", "recent", "uidnext",
+		"uidvalidity", "unseen")
+	if !ok {
+		fail("parsing status attribute, unknown keyword", r)
+	}
+	attrs := []string{k}
 
-  space(r)
-
-  if r.peek(1) != "(" {
-    fail("expected (", r)
-  }
-  r.take(1)
-
-  k, ok := keyword(r, "messages", "recent", "uidnext",
-    "uidvalidity", "unseen")
-  if !ok {
-    fail("parsing status attribute, unknown keyword", r)
-  }
-  attrs := []string{k}
-
-  for {
-    if r.peek(1) != " " {
+	for {
+    if discard(r, ' ') {
       break
     }
-    r.take(1)
 
-    k, ok := keyword(r, "messages", "recent", "uidnext",
-      "uidvalidity", "unseen")
-    if !ok {
-      fail("parsing status attribute, unknown keyword", r)
-    }
-    attrs = append(attrs, k)
-  }
+		k, ok := keyword(r, "messages", "recent", "uidnext",
+			"uidvalidity", "unseen")
+		if !ok {
+			fail("parsing status attribute, unknown keyword", r)
+		}
+		attrs = append(attrs, k)
+	}
 
-  if r.peek(1) != ")" {
-    fail("expected )", r)
-  }
-  r.take(1)
+  require(r, ")")
+	crlf(r)
 
-  crlf(r)
-
-  return &statusCmd{
-    tag: tag,
-    mailbox: s.str,
-    attrs: attrs,
-  }
+	return &statusCmd{
+		tag:     tag,
+		mailbox: mailbox,
+		attrs:   attrs,
+	}
 }
 
 func base64(r *reader) string {
-  str := ""
+  str, ok := takeChars(r, base64Char)
+  if !ok {
+		fail("parsing base64, empty", r)
+  }
 
-  for {
-    c := r.peek(1)
-    if !contains(base64Char, c) {
-      break
+  require(r, "=")
+  discard(r, '=')
+
+	return str
+}
+
+func seqNumber(r *reader) *seqnum {
+  if discard(r, '*') {
+		return &seqnum{0, true}
+	}
+	n := nzNumber(r)
+	if n == nil {
+	  fail("expected seq number", r)
+	}
+	return &seqnum{n.num, false}
+}
+
+type seqnum struct {
+	num int
+	max bool
+}
+
+type seq struct {
+	start, end *seqnum
+}
+
+func seqSet(r *reader) []seq {
+	var seqs []seq
+
+	for {
+		s := seq{
+      start: seqNumber(r),
     }
-    r.take(1)
-    str += c
+
+    if discard(r, ':') {
+			s.end = seqNumber(r)
+		}
+		seqs = append(seqs, s)
+
+    if !discard(r, ',') {
+			break
+		}
+	}
+	return seqs
+}
+
+func section(r *reader) *sectionNode {
+  if !discard(r, '[') {
+    return nil
   }
 
-  if str == "" {
-    fail("parsing base64, empty", r)
+  if discard(r, ']') {
+		return &sectionNode{}
+	}
+
+	// TODO section-part is not handled
+
+	k, ok := keyword(r, "HEADER", "HEADER.FIELDS", "HEADER.FIELDS.NOT", "TEXT")
+	if !ok {
+		fail("expected section keyword", r)
+	}
+
+	sec := &sectionNode{msg: k}
+
+	switch k {
+	case "header.fields", "header.fields.not":
+		space(r)
+		sec.headerList = headerList(r)
+	}
+
+  require(r, "]")
+	return sec
+}
+
+func headerList(r *reader) []string {
+  require(r, "(")
+
+	var names []string
+	for {
+    name := requireAstring(r)
+		names = append(names, name)
+
+    if discard(r, ')') {
+			break
+		}
+    if !discard(r, ' ') {
+			fail("expected space or )", r)
+		}
+	}
+	return names
+}
+
+type fetchAttrNode struct {
+	name string
+	sec  *sectionNode
+}
+
+func fetchAttr(r *reader) *fetchAttrNode {
+	k, ok := keyword(r, "ALL", "FULL", "FAST", "ENVELOPE", "FLAGS", "INTERNALDATE",
+		"RFC822", "RFC822.HEADER", "RFC822.SIZE", "RFC822.TEXT", "BODYSTRUCTURE", "BODY",
+		"BODY.PEEK", "UID")
+	if !ok {
+	  fail("expected fetch keyword", r)
+	}
+
+	n := &fetchAttrNode{name: k}
+
+	switch k {
+	case "body.peek", "body":
+		n.sec = section(r)
+		// TODO handle numerical section of body.peek
+		// "BODY" section ["<" number "." nz-number ">"] /
+		// "BODY.PEEK" section ["<" number "." nz-number ">"]
+	}
+	return n
+}
+
+func fetch(r *reader, tag string) *fetchCmd {
+	space(r)
+	seqs := seqSet(r)
+	space(r)
+	var attrs []*fetchAttrNode
+
+  if discard(r, '(') {
+		for {
+			a := fetchAttr(r)
+			attrs = append(attrs, a)
+
+      if discard(r, ')') {
+				break
+			}
+      if !discard(r, ' ') {
+				fail("expected space or )", r)
+			}
+		}
+
+	} else {
+		a := fetchAttr(r)
+		attrs = append(attrs, a)
+	}
+
+	crlf(r)
+	return &fetchCmd{
+		tag:   tag,
+		seqs:  seqs,
+		attrs: attrs,
+	}
+}
+
+func copy_(r *reader, tag string) *copyCmd {
+	space(r)
+	seqs := seqSet(r)
+	space(r)
+  mailbox := requireAstring(r)
+	crlf(r)
+
+	return &copyCmd{
+		tag:     tag,
+		mailbox: mailbox,
+		seqs:    seqs,
+	}
+}
+
+func flagList(r *reader) []string {
+  require(r, "(")
+  if discard(r, ')') {
+    return nil
+  }
+	f := flags(r)
+  require(r, ")")
+	return f
+}
+
+func flags(r *reader) []string {
+	var list []string
+
+	for {
+    require(r, `\`)
+
+    if discard(r, '*') {
+			list = append(list, "*")
+		} else {
+			list = append(list, atom(r))
+		}
+
+    if discard(r, ' ') {
+			break
+		}
+	}
+	return list
+}
+
+/*
+store           = "STORE" SP sequence-set SP store-att-flags
+
+store-att-flags = (["+" / "-"] "FLAGS" [".SILENT"]) SP
+                  (flag-list / (flag *(SP flag)))
+*/
+func store(r *reader, tag string) *storeCmd {
+	space(r)
+	seqs := seqSet(r)
+	space(r)
+
+	plusMinus := ""
+	c := r.peek(1)
+	if c == "+" || c == "-" {
+		plusMinus = c
+		r.take(1)
+	}
+
+	k, ok := keyword(r, "FLAGS", "FLAGS.SILENT")
+	if !ok {
+		fail("expected store flags keyword", r)
+	}
+
+	space(r)
+
+	var f []string
+	if r.peek(1) == "(" {
+		f = flagList(r)
+	} else {
+		f = flags(r)
+	}
+
+	return &storeCmd{
+		tag:       tag,
+		plusMinus: plusMinus,
+		seqs:      seqs,
+		key:       k,
+		flags:     f,
+	}
+}
+
+func search(r *reader, tag string) *searchCmd {
+  space(r)
+  var charset string
+
+  _, ok := keyword(r, "charset")
+  if ok {
+    charset = requireAstring(r)
   }
 
-  if r.peek(1) != "=" {
-    fail("parsing base64, expected =", r)
-  }
-  r.take(1)
-
-  if r.peek(1) == "=" {
-    r.take(1)
+  if discard(r, ')') {
+    for {
+    }
   }
 
-  return str
+}
+
+func searchKey(r *reader) searchKeyNode {
+  k, ok := keyword(r, "all", "answered", "bcc", "before", "body", "cc", "deleted",
+    "flagged", "from", "keyword", "new", "old", "on", "recent", "seen", "since",
+    "subject", "text", "to", "unanswered", "undeleted", "unflagged", "unkeyword",
+    "unseen", "draft", "header", "larger", "not", "or", "sentbefore", "senton",
+    "sentsince", "smaller", "uid", "undraft")
+
+  switch k {
+  case "all", "answered", "deleted", "flagged", "new", "old", "recent", "seen"
+       "unanswered", "undeleted", "unflagged", "unseen", "draft", "undraft":
+    return &simpleSearchKey{k}
+
+  case "bcc":
+    arg := requireAstring(r)
+    return &bccSearchKey{arg}
+  case "before":
+  case "body":
+    arg := requireAstring(r)
+    return &bodySearchKey{arg}
+  case "cc":
+    arg := requireAstring(r)
+    return &ccSearchKey{arg}
+  case "from":
+    arg := requireAstring(r)
+    return &fromSearchKey{arg}
+  case "keyword":
+  case "on":
+  case "since":
+  case "subject":
+    arg := requireAstring(r)
+    return &subjectSearchKey{arg}
+  case "text":
+    arg := requireAstring(r)
+    return &textSearchKey{arg}
+  case "to":
+    arg := requireAstring(r)
+    return &toSearchKey{arg}
+  case "unkeyword":
+  case "unseen":
+  case "header":
+  case "larger":
+  case "not":
+    arg := searchKey(r)
+    return &notSearchKey{arg}
+  case "or":
+    arg := searchKey(r)
+    space(r)
+    arg2 := searchKey(r)
+    return &orSearchKey{arg, arg2}
+  case "sentbefore":
+  case "senton":
+  case "sentsince":
+  case "smaller":
+  case "uid":
+  }
+  // TODO sequence-set
+}
+
+func nstring(r *reader) *nstringNode {
+  _, ok := keyword(r, "nil")
+  if ok {
+    return &nstringNode{isNil: true}
+  }
+  s, ok := string_(r)
+  if !ok {
+    fail("expected NIL or string", r)
+  }
+  return &nstringNode{str: s}
+}
+
+func address(r *reader) *addressNode {
+  require(r, "(")
+  name := nstring(r)
+  space(r)
+  adl := nstring(r)
+  space(r)
+  mailbox := nstring(r)
+  space(r)
+  host := nstring(r)
+  require(r, ")")
+  return &addressNode{name, adl, mailbox, host}
 }

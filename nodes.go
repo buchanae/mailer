@@ -74,6 +74,35 @@ type authCmd struct {
   tag, authType string
 }
 
+type fetchCmd struct {
+  tag string
+  seqs []seq
+  attrs []*fetchAttrNode
+}
+
+type sectionNode struct {
+  msg string
+  headerList []string
+}
+
+type copyCmd struct {
+  tag, mailbox string
+  seqs []seq
+}
+
+type storeCmd struct {
+  tag string
+  plusMinus string
+  seqs []seq
+  key string
+  flags []string
+}
+
+type nstringNode struct {
+  isNil bool
+  str string
+}
+
 func (*strNode) isNode() {}
 func (*numNode) isNode() {}
 func (*literalNode) isNode() {}
@@ -90,3 +119,6 @@ func (*subscribeCmd) isNode() {}
 func (*unsubscribeCmd) isNode() {}
 func (*statusCmd) isNode() {}
 func (*authCmd) isNode() {}
+func (*fetchCmd) isNode() {}
+func (*copyCmd) isNode() {}
+func (*storeCmd) isNode() {}
