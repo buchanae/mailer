@@ -88,6 +88,21 @@ func takeChars(r *reader, chars []string) (string, bool) {
 	return str, len(str) != 0
 }
 
+func require(r *reader, s string) {
+  if r.peek(len(s)) != s {
+    fail("expected " + s, r)
+  }
+  r.take(len(s))
+}
+
+func discard(r *reader, s rune) bool {
+  if r.peek(1) == string(s) {
+    r.take(1)
+    return true
+  }
+  return false
+}
+
 func requireAstring(r *reader) string {
 	s := astring(r)
 	if s == nil {
@@ -211,14 +226,6 @@ func string_(r *reader) (string, bool) {
 	return l.content, true
 }
 
-func tag(r *reader) *tagNode {
-	tag, ok := takeChars(r, tagChar)
-	if !ok {
-		return nil
-	}
-	return &tagNode{tag: tag}
-}
-
 // astring = 1*ASTRING-CHAR / string
 func astring(r *reader) *strNode {
 	s, ok := takeChars(r, astringChar)
@@ -244,11 +251,27 @@ func keywordStr(r *reader) (string, bool) {
 	return takeChars(r, keywordChar)
 }
 
-func command(r *reader) node {
-	t := tag(r)
-	if t == nil {
-		fail("expected tag", r)
-	}
+func command(r *reader) (cmd commandI, err error) {
+  cmd = &unknownRequest{"*"}
+
+  var tag string
+  defer func() {
+    if e := recover(); e != nil {
+      if x, ok := e.(error); ok {
+        err = x
+      } else {
+        err = fmt.Errorf("%s", e)
+      }
+    }
+  }()
+
+	if t, ok := takeChars(r, tagChar); ok {
+    tag = t
+    cmd = &unknownRequest{tag}
+  } else {
+    fail("expected tag", r)
+  }
+
 	space(r)
 
 	k, ok := keyword(r,
@@ -265,59 +288,63 @@ func command(r *reader) node {
 	}
 
 	switch k {
-	case "capability", "logout", "noop", "starttls", "check",
-		"close", "expunge":
+  case "capability":
 		crlf(r)
-		return &simpleCmd{
-			tag:  t.tag,
-			name: k,
-		}
-
+    cmd = &capabilityRequest{tag: tag}
+  case "logout":
+		crlf(r)
+    cmd = &logoutRequest{tag: tag}
+  case "noop":
+		crlf(r)
+    cmd = &noopRequest{tag: tag}
+  case "starttls":
+		crlf(r)
+    cmd = &startTLSRequest{tag: tag}
+  case "check":
+		crlf(r)
+    cmd = &checkRequest{tag: tag}
+  case "close":
+		crlf(r)
+    cmd = &closeRequest{tag: tag}
+  case "expunge":
+		crlf(r)
+    cmd = &expungeRequest{tag: tag}
 	case "create":
-		return create(r, t.tag)
+		cmd = create(r, tag)
 	case "delete":
-		return delete_(r, t.tag)
+		cmd = delete_(r, tag)
 	case "examine":
-		return examine(r, t.tag)
+		cmd = examine(r, tag)
 	case "list":
-		return list(r, t.tag)
+		cmd = list(r, tag)
 	case "lsub":
-		return lsub(r, t.tag)
+		cmd = lsub(r, tag)
 	case "rename":
-		return rename(r, t.tag)
+		cmd = rename(r, tag)
 	case "select":
-		return select_(r, t.tag)
+		cmd = select_(r, tag)
 	case "subscribe":
-		return subscribe(r, t.tag)
+		cmd = subscribe(r, tag)
 	case "unsubscribe":
-		return unsubscribe(r, t.tag)
+		cmd = unsubscribe(r, tag)
 	case "login":
-		return login(r, t.tag)
+		cmd = login(r, tag)
 	case "status":
-		return status(r, t.tag)
+		cmd = status(r, tag)
 	case "authenticate":
-		return authenticate(r, t.tag)
+		cmd = authenticate(r, tag)
 	case "fetch":
-		return fetch(r, t.tag)
+		cmd = fetch(r, tag)
 	case "copy":
-		return copy_(r, t.tag)
+		cmd = copy_(r, tag)
 	case "store":
-		return store(r, t.tag)
+		cmd = store(r, tag)
+  default:
+	  fail(fmt.Sprintf("unrecognized command %q", k), r)
 	}
 
-	fail(fmt.Sprintf("unrecognized command %q", k), r)
-	return nil
-}
-
-func authenticate(r *reader, tag string) *authCmd {
-	space(r)
-	a := atom(r)
-	crlf(r)
-
-	return &authCmd{
-		tag:      tag,
-		authType: a,
-	}
+  err = nil
+  return
 }
 
 // TODO keyword always takes characters from the reader,
@@ -337,72 +364,96 @@ func keyword(r *reader, allowed ...string) (string, bool) {
 	return "", false
 }
 
-func login(r *reader, tag string) *loginCmd {
+func authenticate(r *reader, tag string) *AuthenticateRequest {
+	space(r)
+	a := atom(r)
+	crlf(r)
+	return &AuthenticateRequest{
+		tag:      tag,
+		AuthType: a,
+	}
+}
+
+func login(r *reader, tag string) *LoginRequest {
 	space(r)
 	user := requireAstring(r)
 	space(r)
 	pass := requireAstring(r)
 	crlf(r)
-
-	return &loginCmd{
+	return &LoginRequest{
 		tag:  tag,
-		user: user,
-		pass: pass,
+		Username: user,
+		Password: pass,
 	}
 }
 
-func create(r *reader, tag string) *createCmd {
+func create(r *reader, tag string) *CreateRequest {
 	space(r)
 	mailbox := requireAstring(r)
 	crlf(r)
-	return &createCmd{tag: tag, mailbox: mailbox}
+	return &CreateRequest{tag: tag, Mailbox: mailbox}
 }
 
-func delete_(r *reader, tag string) *deleteCmd {
+func delete_(r *reader, tag string) *DeleteRequest {
 	space(r)
 	mailbox := requireAstring(r)
 	crlf(r)
-	return &deleteCmd{tag: tag, mailbox: mailbox}
+	return &DeleteRequest{
+    tag: tag,
+    Mailbox: mailbox,
+  }
 }
 
-func examine(r *reader, tag string) *examineCmd {
+func examine(r *reader, tag string) *ExamineRequest {
 	space(r)
 	mailbox := requireAstring(r)
 	crlf(r)
-	return &examineCmd{tag: tag, mailbox: mailbox}
+	return &ExamineRequest{
+    tag: tag,
+    Mailbox: mailbox,
+  }
 }
 
-func rename(r *reader, tag string) *renameCmd {
+func rename(r *reader, tag string) *RenameRequest {
 	space(r)
 	from := requireAstring(r)
 	space(r)
 	to := requireAstring(r)
 	crlf(r)
-	return &renameCmd{tag: tag, from: from, to: to}
+	return &RenameRequest{tag: tag, From: from, To: to}
 }
 
-func select_(r *reader, tag string) *selectCmd {
+func select_(r *reader, tag string) *SelectRequest {
 	space(r)
 	mailbox := requireAstring(r)
 	crlf(r)
-	return &selectCmd{tag: tag, mailbox: mailbox}
+	return &SelectRequest{
+    tag: tag,
+    Mailbox: mailbox,
+  }
 }
 
-func subscribe(r *reader, tag string) *subscribeCmd {
+func subscribe(r *reader, tag string) *SubscribeRequest {
 	space(r)
 	mailbox := requireAstring(r)
 	crlf(r)
-	return &subscribeCmd{tag: tag, mailbox: mailbox}
+	return &SubscribeRequest{
+    tag: tag,
+    Mailbox: mailbox,
+  }
 }
 
-func unsubscribe(r *reader, tag string) *unsubscribeCmd {
+func unsubscribe(r *reader, tag string) *UnsubscribeRequest {
 	space(r)
 	mailbox := requireAstring(r)
 	crlf(r)
-	return &unsubscribeCmd{tag: tag, mailbox: mailbox}
+	return &UnsubscribeRequest{
+    tag: tag,
+    Mailbox: mailbox,
+  }
 }
 
-func list(r *reader, tag string) *listCmd {
+func list(r *reader, tag string) *ListRequest {
 	space(r)
 	mailbox := requireAstring(r)
 	space(r)
@@ -413,12 +464,20 @@ func list(r *reader, tag string) *listCmd {
 	}
 
 	crlf(r)
-	return &listCmd{tag: tag, mailbox: mailbox, query: q}
+	return &ListRequest{
+    tag: tag,
+    Mailbox: mailbox,
+    Query: q,
+  }
 }
 
-func lsub(r *reader, tag string) *lsubCmd {
+func lsub(r *reader, tag string) *LsubRequest {
 	l := list(r, tag)
-	return &lsubCmd{tag: l.tag, mailbox: l.mailbox, query: l.query}
+	return &LsubRequest{
+    tag: l.tag,
+    Mailbox: l.Mailbox,
+    Query: l.Query,
+  }
 }
 
 func listMailbox(r *reader) (string, bool) {
@@ -433,55 +492,34 @@ func listMailbox1(r *reader) (string, bool) {
 	return takeChars(r, listChar)
 }
 
-func require(r *reader, s string) {
-  if r.peek(len(s)) != s {
-    fail("expected " + s, r)
-  }
-  r.take(len(s))
-}
-
-func discard(r *reader, s rune) bool {
-  if r.peek(1) == string(s) {
-    r.take(1)
-    return true
-  }
-  return false
-}
-
-
-func status(r *reader, tag string) *statusCmd {
+func status(r *reader, tag string) *StatusRequest {
 	space(r)
   mailbox := requireAstring(r)
 	space(r)
   require(r, "(")
 
-	k, ok := keyword(r, "messages", "recent", "uidnext",
-		"uidvalidity", "unseen")
-	if !ok {
-		fail("parsing status attribute, unknown keyword", r)
-	}
-	attrs := []string{k}
+  var attrs []string
 
 	for {
-    if discard(r, ' ') {
-      break
-    }
-
 		k, ok := keyword(r, "messages", "recent", "uidnext",
 			"uidvalidity", "unseen")
 		if !ok {
 			fail("parsing status attribute, unknown keyword", r)
 		}
 		attrs = append(attrs, k)
+
+    if !discard(r, ' ') {
+      break
+    }
 	}
 
   require(r, ")")
 	crlf(r)
 
-	return &statusCmd{
+	return &StatusRequest{
 		tag:     tag,
-		mailbox: mailbox,
-		attrs:   attrs,
+		Mailbox: mailbox,
+		Attrs:   attrs,
 	}
 }
 
@@ -608,7 +646,7 @@ func fetchAttr(r *reader) *fetchAttrNode {
 	return n
 }
 
-func fetch(r *reader, tag string) *fetchCmd {
+func fetch(r *reader, tag string) *FetchRequest {
 	space(r)
 	seqs := seqSet(r)
 	space(r)
@@ -633,24 +671,24 @@ func fetch(r *reader, tag string) *fetchCmd {
 	}
 
 	crlf(r)
-	return &fetchCmd{
+	return &FetchRequest{
 		tag:   tag,
-		seqs:  seqs,
-		attrs: attrs,
+		Seqs:  seqs,
+		Attrs: attrs,
 	}
 }
 
-func copy_(r *reader, tag string) *copyCmd {
+func copy_(r *reader, tag string) *CopyRequest {
 	space(r)
 	seqs := seqSet(r)
 	space(r)
   mailbox := requireAstring(r)
 	crlf(r)
 
-	return &copyCmd{
+	return &CopyRequest{
 		tag:     tag,
-		mailbox: mailbox,
-		seqs:    seqs,
+		Mailbox: mailbox,
+		Seqs:    seqs,
 	}
 }
 
@@ -689,7 +727,7 @@ store           = "STORE" SP sequence-set SP store-att-flags
 store-att-flags = (["+" / "-"] "FLAGS" [".SILENT"]) SP
                   (flag-list / (flag *(SP flag)))
 */
-func store(r *reader, tag string) *storeCmd {
+func store(r *reader, tag string) *StoreRequest {
 	space(r)
 	seqs := seqSet(r)
 	space(r)
@@ -715,7 +753,7 @@ func store(r *reader, tag string) *storeCmd {
 		f = flags(r)
 	}
 
-	return &storeCmd{
+	return &StoreRequest{
 		tag:       tag,
 		plusMinus: plusMinus,
 		seqs:      seqs,
@@ -724,7 +762,7 @@ func store(r *reader, tag string) *storeCmd {
 	}
 }
 
-func search(r *reader, tag string) *searchCmd {
+func search(r *reader, tag string) *SearchRequest {
   space(r)
   var charset string
 
@@ -743,11 +781,15 @@ func search(r *reader, tag string) *searchCmd {
       }
     }
     require(r, ")")
-    return &searchCmd{charset: charset, keys: keys}
+    return &SearchRequest{Charset: charset, Keys: keys}
   }
 
   sk := searchKey(r)
-  return &searchCmd{charset: charset, keys: []searchKeyNode{sk}}
+  return &SearchRequest{
+    tag: tag,
+    Charset: charset,
+    Keys: []searchKeyNode{sk},
+  }
 }
 
 func searchKey(r *reader) searchKeyNode {

@@ -7,6 +7,8 @@ import (
 
 type reader struct {
   r *bufio.Reader
+  err error
+  pos int
 }
 
 func newReader(r io.Reader) *reader {
@@ -15,7 +17,8 @@ func newReader(r io.Reader) *reader {
 
 func (r *reader) peek(n int) string {
   b, err := r.r.Peek(n)
-  if err != nil && err != io.EOF {
+  if err != nil {
+    r.err = err
     panic(err)
   }
   return string(b)
@@ -23,7 +26,9 @@ func (r *reader) peek(n int) string {
 
 func (r *reader) take(n int) {
   _, err := r.r.Discard(n)
-  if err != nil && err != io.EOF {
+  if err != nil {
+    r.err = err
     panic(err)
   }
+  r.pos += n
 }

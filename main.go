@@ -6,9 +6,18 @@ import (
   "log"
   "io"
   "net"
+  "strings"
+  "github.com/kr/pretty"
 )
 
+type ConnectionState struct {
+  Mailbox string
+  Authenticated bool
+}
+
 func main() {
+  ctrl := &fake{}
+
   ln, err := net.Listen("tcp", "localhost:9855")
   if err != nil {
     log.Fatalln("failed to listen", err)
@@ -21,120 +30,195 @@ func main() {
     if err != nil {
       log.Fatalln("failed to accept", err)
     }
-    go handleConn(conn)
+    go handleConn(conn, ctrl)
   }
 }
 
-type account struct {
-  mailboxes map[string]mailbox
-}
-
-type mailbox struct {
-  name string
-  uidnext, uidvalid uint32
-}
-
-func handleConn(src io.ReadWriteCloser) {
+func handleConn(conn io.ReadWriteCloser, ctrl Controller) {
   log.Println("connection opened")
   all := &bytes.Buffer{}
-  defer src.Close()
+  defer conn.Close()
 
-  wr := func(s string, args ...interface{}) {
-    fmt.Fprintf(src, s, args...)
-    fmt.Fprint(src, "\r\n")
-  }
+  w := &ResponseWriter{Tag: "*", w: conn}
+  w.Untagged("OK IMAP4rev1 server ready\r\n")
 
-  fmt.Fprintf(src, "* OK IMAP4rev1 server ready\r\n")
-
-  defer func() {
-    if e := recover(); e != nil {
-      log.Println("error", e)
-      log.Printf("%#v\n", all.String())
-    }
-  }()
-
-  t := io.TeeReader(src, all)
+  t := io.TeeReader(conn, all)
   r := newReader(t)
 
   for {
     all.Reset()
+    r.pos = 0
 
-    log.Println("READ")
-    x := command(r)
-    if x == nil {
-      break
+    x, err := command(r)
+
+    if r.err != nil {
+      if err != io.EOF {
+        log.Println(err)
+      }
+      return
     }
-    log.Printf("COMMAND: %#v\n", x)
 
-    switch z := x.(type) {
-    case *simpleCmd:
-      switch z.name {
-      case "capability":
-        //wr("* CAPABILITY IMAP4rev1 AUTH=PLAIN")
-        wr("* CAPABILITY IMAP4rev1")
-        wr("%s OK CAPABILITY Completed", z.tag)
-
-      case "logout":
-        wr("* BYE IMAP4rev1 Server logging out")
-        wr("%s OK LOGOUT Completed", z.tag)
-        return
-
-      case "check":
-        wr("%s OK CHECK Completed", z.tag)
-      }
-
-    case *loginCmd:
-      wr("%s OK LOGIN Completed", z.tag)
-
-    case *authCmd:
-      if z.authType == "PLAIN" {
-        wr("+")
-        tok := base64(r)
-        crlf(r)
-        log.Println("AUTH TOK", tok)
-      }
-
-    case *createCmd:
-      wr(`%s OK CREATE Completed`, z.tag)
-
-    case *listCmd:
-      switch z.query {
-      case "":
-        wr(`* LIST (\Noselect) "/" ""`)
-        wr(`%s OK LIST Completed`, z.tag)
-      case "*":
-        wr(`* LIST () "/" "testone"`)
-        wr(`* LIST () "/" "testtwo"`)
-        wr(`%s OK LIST Completed`, z.tag)
-      }
-
-    case *lsubCmd:
-      wr(`* LSUB () "/" "testone"`)
-      wr(`* LSUB () "/" "testtwo"`)
-      wr(`%s OK LSUB Completed`, z.tag)
-
-    case *statusCmd:
-      wr(`* STATUS %s (MESSAGES 10 UIDVALIDITY 3857529045 UIDNEXT 11 UNSEEN 1)`, z.mailbox)
-      wr(`%s OK STATUS Completed`, z.tag)
-
-    case *examineCmd:
-      wr(`* 10 EXISTS`)
-      wr(`* 5 RECENT`)
-      wr(`* FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
-      wr(`%s OK [READ-ONLY] EXAMINE Completed`, z.tag)
-
-    case *selectCmd:
-      wr(`* 10 EXISTS`)
-      wr(`* 5 RECENT`)
-      wr(`* FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
-      wr(`%s OK [READ-ONLY] SELECT Completed`, z.tag)
-
-    case *fetchCmd:
-      log.Println("fetch")
-
-    case *copyCmd:
-
-    case *storeCmd:
+    w.Tag = "*"
+    if x != nil {
+      w.Tag = x.requestTag()
     }
+
+    if err != nil {
+      log.Printf("%s\n", all.String())
+      pad := strings.Repeat(" ", r.pos)
+      log.Printf("%s^\n", pad)
+      log.Println("error", err)
+      w.Taggedf("BAD %s", err)
+      return
+    }
+
+    pretty.Println("CMD:", x)
+
+    // TODO command handling should probably be async
+    resp, err := handleCommand(x, ctrl)
+    if err != nil {
+      w.Taggedf("NO %s", err)
+      continue
+    }
+    resp.Respond(w)
   }
+}
+
+func handleCommand(cmd commandI, ctrl Controller) (Responder, error) {
+  switch z := cmd.(type) {
+
+  case *noopRequest:
+    return ctrl.Noop()
+
+  case *checkRequest:
+    return completed{"CHECK"}, ctrl.Check()
+
+  case *capabilityRequest:
+    return ctrl.Capability()
+
+  case *expungeRequest:
+    return ctrl.Expunge()
+
+  case *LoginRequest:
+    return completed{"LOGIN"}, ctrl.Login(z)
+
+  case *logoutRequest:
+    err := ctrl.Logout()
+    return logoutResponse{}, err
+
+  case *AuthenticateRequest:
+    err := ctrl.Authenticate(z)
+    _ = err
+    return nil, fmt.Errorf("authenticate is not implemented")
+    /*
+    TODO auth is difficult because it's a multi-step
+         challenge/response
+    if z.authType == "PLAIN" {
+      wr("+")
+      tok := base64(r)
+      crlf(r)
+      log.Println("AUTH TOK", tok)
+    }
+    */
+
+  case *startTLSRequest:
+    err := ctrl.StartTLS()
+    _ = err
+    return nil, fmt.Errorf("startTLS is not implemented")
+
+  case *CreateRequest:
+    return completed{"CREATE"}, ctrl.Create(z)
+
+  case *RenameRequest:
+    return completed{"RENAME"}, ctrl.Rename(z)
+
+  case *DeleteRequest:
+    return completed{"DELETE"}, ctrl.Delete(z)
+
+  case *ListRequest:
+    return ctrl.List(z)
+
+  case *LsubRequest:
+    return ctrl.Lsub(z)
+
+  case *SubscribeRequest:
+    return completed{"SUBSCRIBE"}, ctrl.Subscribe(z)
+
+  case *UnsubscribeRequest:
+    return completed{"UNSUBSCRIBE"}, ctrl.Unsubscribe(z)
+
+  case *SelectRequest:
+    return ctrl.Select(z)
+
+  case *closeRequest:
+    return completed{"CLOSE"}, ctrl.Close()
+
+  case *ExamineRequest:
+    return ctrl.Examine(z)
+
+  case *StatusRequest:
+    return ctrl.Status(z)
+
+  case *FetchRequest:
+    return ctrl.Fetch(z)
+
+  case *SearchRequest:
+    return ctrl.Search(z)
+
+  case *CopyRequest:
+    return completed{"COPY"}, ctrl.Copy(z)
+
+  case *StoreRequest:
+    return ctrl.Store(z)
+
+  // TODO server needs to send command in order to accept
+  //      literal data for some commands, such as append.
+  case *AppendRequest:
+    return completed{"APPEND"}, ctrl.Append(z)
+  }
+  return nil, fmt.Errorf("unknown command")
+}
+
+type Responder interface {
+  Respond(*ResponseWriter)
+}
+
+type completed struct {
+  name string
+}
+func (s completed) Respond(w *ResponseWriter) {
+  w.Taggedf("OK %s Completed", s.name)
+}
+
+type logoutResponse struct {}
+func (l logoutResponse) Respond(w *ResponseWriter) {
+  w.Untagged("* BYE IMAP4rev1 Server logging out")
+  w.Tagged("OK LOGOUT Completed")
+}
+
+// TODO what about large responses?
+type ResponseWriter struct {
+  Tag string
+  w io.Writer
+}
+func (r *ResponseWriter) Untagged(msg string) {
+  fmt.Fprint(r.w, "*")
+  fmt.Fprint(r.w, " ")
+  fmt.Fprint(r.w, msg)
+  fmt.Fprint(r.w, "\r\n")
+}
+func (r *ResponseWriter) Tagged(msg string) {
+  // TODO what if there's an error while writing?
+  fmt.Fprint(r.w, r.Tag)
+  fmt.Fprint(r.w, " ")
+  fmt.Fprint(r.w, msg)
+  fmt.Fprint(r.w, "\r\n")
+}
+
+func (r *ResponseWriter) Untaggedf(msg string, args ...interface{}) {
+  r.Untagged(fmt.Sprintf(msg, args...))
+}
+
+func (r *ResponseWriter) Taggedf(msg string, args ...interface{}) {
+  r.Tagged(fmt.Sprintf(msg, args...))
 }

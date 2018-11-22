@@ -1,9 +1,5 @@
 package main
 
-type node interface {
-  isNode()
-}
-
 type strNode struct {
   str string
 }
@@ -17,90 +13,9 @@ type literalNode struct {
   content string
 }
 
-type tagNode struct {
-  tag string
-}
-
-type simpleCmd struct {
-  tag, name string
-}
-
-type loginCmd struct {
-  tag, user, pass string
-}
-
-type createCmd struct {
-  tag, mailbox string
-}
-
-type deleteCmd struct {
-  tag, mailbox string
-}
-
-type examineCmd struct {
-  tag, mailbox string
-}
-
-type listCmd struct {
-  tag, mailbox, query string
-}
-
-type lsubCmd struct {
-  tag, mailbox, query string
-}
-
-type renameCmd struct {
-  tag, from, to string
-}
-
-type selectCmd struct {
-  tag, mailbox string
-}
-
-type subscribeCmd struct {
-  tag, mailbox string
-}
-
-type unsubscribeCmd struct {
-  tag, mailbox string
-}
-
-type statusCmd struct {
-  tag, mailbox string
-  attrs []string
-}
-
-type authCmd struct {
-  tag, authType string
-}
-
-type fetchCmd struct {
-  tag string
-  seqs []seq
-  attrs []*fetchAttrNode
-}
-
 type sectionNode struct {
   msg string
   headerList []string
-}
-
-type copyCmd struct {
-  tag, mailbox string
-  seqs []seq
-}
-
-type storeCmd struct {
-  tag string
-  plusMinus string
-  seqs []seq
-  key string
-  flags []string
-}
-
-type searchCmd struct {
-  charset string
-  keys []searchKeyNode
 }
 
 type nstringNode struct {
@@ -112,25 +27,46 @@ type addressNode struct {
   name, adl, mailbox, host *nstringNode
 }
 
-func (*strNode) isNode() {}
-func (*numNode) isNode() {}
-func (*literalNode) isNode() {}
-func (*simpleCmd) isNode() {}
-func (*loginCmd) isNode() {}
-func (*createCmd) isNode() {}
-func (*deleteCmd) isNode() {}
-func (*examineCmd) isNode() {}
-func (*listCmd) isNode() {}
-func (*lsubCmd) isNode() {}
-func (*renameCmd) isNode() {}
-func (*selectCmd) isNode() {}
-func (*subscribeCmd) isNode() {}
-func (*unsubscribeCmd) isNode() {}
-func (*statusCmd) isNode() {}
-func (*authCmd) isNode() {}
-func (*fetchCmd) isNode() {}
-func (*copyCmd) isNode() {}
-func (*storeCmd) isNode() {}
+type unknownRequest struct {
+  tag string
+}
+
+type capabilityRequest struct { tag string }
+type logoutRequest struct { tag string }
+type noopRequest struct { tag string }
+type startTLSRequest struct { tag string }
+type checkRequest struct { tag string }
+type closeRequest struct { tag string }
+type expungeRequest struct { tag string }
+
+type commandI interface {
+  requestTag() string
+}
+func (x *unknownRequest) requestTag() string { return x.tag }
+func (x *capabilityRequest) requestTag() string { return x.tag }
+func (x *logoutRequest) requestTag() string { return x.tag }
+func (x *noopRequest) requestTag() string { return x.tag }
+func (x *startTLSRequest) requestTag() string { return x.tag }
+func (x *checkRequest) requestTag() string { return x.tag }
+func (x *closeRequest) requestTag() string { return x.tag }
+func (x *expungeRequest) requestTag() string { return x.tag }
+func (x *LoginRequest) requestTag() string { return x.tag }
+func (x *CreateRequest) requestTag() string { return x.tag }
+func (x *DeleteRequest) requestTag() string { return x.tag }
+func (x *ExamineRequest) requestTag() string { return x.tag }
+func (x *ListRequest) requestTag() string { return x.tag }
+func (x *LsubRequest) requestTag() string { return x.tag }
+func (x *RenameRequest) requestTag() string { return x.tag }
+func (x *SelectRequest) requestTag() string { return x.tag }
+func (x *SubscribeRequest) requestTag() string { return x.tag }
+func (x *UnsubscribeRequest) requestTag() string { return x.tag }
+func (x *StatusRequest) requestTag() string { return x.tag }
+func (x *AuthenticateRequest) requestTag() string { return x.tag }
+func (x *FetchRequest) requestTag() string { return x.tag }
+func (x *CopyRequest) requestTag() string { return x.tag }
+func (x *StoreRequest) requestTag() string { return x.tag }
+func (x *SearchRequest) requestTag() string { return x.tag }
+func (x *AppendRequest) requestTag() string { return x.tag }
 
 type searchKeyNode interface {
   isSearchKey()

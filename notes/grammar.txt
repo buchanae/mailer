@@ -1,30 +1,5 @@
 
 
-address         = "(" addr-name SP addr-adl SP addr-mailbox SP
-                  addr-host ")"
-
-addr-adl        = nstring
-                    ; Holds route from [RFC-2822] route-addr if
-                    ; non-NIL
-
-addr-host       = nstring
-                    ; NIL indicates [RFC-2822] group syntax.
-                    ; Otherwise, holds [RFC-2822] domain name
-
-addr-mailbox    = nstring
-                    ; NIL indicates end of [RFC-2822] group; if
-                    ; non-NIL and addr-host is NIL, holds
-                    ; [RFC-2822] group name.
-                    ; Otherwise, holds [RFC-2822] local-part
-                    ; after removing [RFC-2822] quoting
-
-
-addr-name       = nstring
-                    ; If non-NIL, holds phrase from [RFC-2822]
-                    ; mailbox after removing [RFC-2822] quoting
-
-
-
 
 append          = "APPEND" SP mailbox [SP flag-list] [SP date-time] SP
                   literal
@@ -118,7 +93,6 @@ date-month      = "Jan" / "Feb" / "Mar" / "Apr" / "May" / "Jun" /
                   "Jul" / "Aug" / "Sep" / "Oct" / "Nov" / "Dec"
 
 date-text       = date-day "-" date-month "-" date-year
-
 
 date-year       = 4DIGIT
 

@@ -40,7 +40,7 @@ func fail(msg string, r *reader) {
   e := fmt.Errorf("error: %s at pos %d\n%s\n%s^\n",
     msg, r.pos, r.line, pad)
   */
-  e := fmt.Errorf("error: %s\n", msg)
+  e := fmt.Errorf("error: %s", msg)
   panic(e)
 }
 
