@@ -31,6 +31,19 @@ type unknownRequest struct {
   tag string
 }
 
+type uidFetch struct {
+  *FetchRequest
+}
+type uidStore struct {
+  *StoreRequest
+}
+type uidSearch struct {
+  *SearchRequest
+}
+type uidCopy struct {
+  *CopyRequest
+}
+
 type capabilityRequest struct { tag string }
 type logoutRequest struct { tag string }
 type noopRequest struct { tag string }

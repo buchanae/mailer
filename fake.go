@@ -27,6 +27,16 @@ func (*fake) Logout() error {
 }
 
 func (*fake) Authenticate(*AuthenticateRequest) error {
+    /*
+    TODO auth is difficult because it's a multi-step
+         challenge/response
+    if z.authType == "PLAIN" {
+      wr("+")
+      tok := base64(r)
+      crlf(r)
+      log.Println("AUTH TOK", tok)
+    }
+    */
   return nil
 }
 
@@ -59,7 +69,6 @@ func (*fake) List(r *ListRequest) (*ListResponse, error) {
     return &ListResponse{
       Items: []ListItem{
         {Delimiter: "/", Name: "testone"},
-        {Delimiter: "/", Name: "testtwo"},
       },
     }, nil
   }
@@ -91,7 +100,15 @@ func (*fake) Examine(*ExamineRequest) (*ExamineResponse, error) {
 }
 
 func (*fake) Status(r *StatusRequest) (*StatusResponse, error) {
-  return &StatusResponse{Mailbox: r.Mailbox}, nil
+  return &StatusResponse{
+    Mailbox: r.Mailbox,
+    Counts: map[string]int{
+      "MESSAGES": 1,
+      "UIDNEXT": 6,
+      "UIDVALIDITY": 4,
+      "UNSEEN": 0,
+    },
+  }, nil
 }
 
 func (*fake) Fetch(*FetchRequest) (*FetchResponse, error) {
@@ -112,4 +129,20 @@ func (*fake) Store(*StoreRequest) (*StoreResponse, error) {
 
 func (*fake) Append(*AppendRequest) error {
   return nil
+}
+
+func (*fake) UIDFetch(*FetchRequest) (*FetchResponse, error) {
+  return &FetchResponse{}, nil
+}
+
+func (*fake) UIDCopy(*CopyRequest) error {
+  return nil
+}
+
+func (*fake) UIDStore(*StoreRequest) (*StoreResponse, error) {
+  return &StoreResponse{}, nil
+}
+
+func (*fake) UIDSearch(*SearchRequest) (*SearchResponse, error) {
+  return &SearchResponse{}, nil
 }

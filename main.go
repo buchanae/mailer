@@ -6,6 +6,7 @@ import (
   "log"
   "io"
   "net"
+  "os"
   "strings"
   "github.com/kr/pretty"
 )
@@ -16,7 +17,6 @@ type ConnectionState struct {
 }
 
 func main() {
-  ctrl := &fake{}
 
   ln, err := net.Listen("tcp", "localhost:9855")
   if err != nil {
@@ -30,17 +30,20 @@ func main() {
     if err != nil {
       log.Fatalln("failed to accept", err)
     }
-    go handleConn(conn, ctrl)
+    go handleConn(conn)
   }
 }
 
-func handleConn(conn io.ReadWriteCloser, ctrl Controller) {
+func handleConn(conn io.ReadWriteCloser) {
+  ctrl := &fake{}
+
   log.Println("connection opened")
   all := &bytes.Buffer{}
   defer conn.Close()
 
-  w := &ResponseWriter{Tag: "*", w: conn}
-  w.Untagged("OK IMAP4rev1 server ready\r\n")
+  m := io.MultiWriter(conn, os.Stderr)
+  w := &ResponseWriter{Tag: "*", w: m}
+  w.Untagged("OK IMAP4rev1 server ready")
 
   t := io.TeeReader(conn, all)
   r := newReader(t)
@@ -51,10 +54,12 @@ func handleConn(conn io.ReadWriteCloser, ctrl Controller) {
 
     x, err := command(r)
 
+    if r.err == io.EOF {
+      log.Println("EOF")
+      return
+    }
     if r.err != nil {
-      if err != io.EOF {
-        log.Println(err)
-      }
+      log.Println(r.err)
       return
     }
 
@@ -81,6 +86,10 @@ func handleConn(conn io.ReadWriteCloser, ctrl Controller) {
       continue
     }
     resp.Respond(w)
+
+    if _, ok := resp.(logoutResponse); ok {
+      return
+    }
   }
 }
 
@@ -175,50 +184,18 @@ func handleCommand(cmd commandI, ctrl Controller) (Responder, error) {
   //      literal data for some commands, such as append.
   case *AppendRequest:
     return completed{"APPEND"}, ctrl.Append(z)
+
+  case uidFetch:
+    return ctrl.UIDFetch(z.FetchRequest)
+
+  case uidStore:
+    return ctrl.UIDStore(z.StoreRequest)
+
+  case uidSearch:
+    return ctrl.UIDSearch(z.SearchRequest)
+
+  case uidCopy:
+    return completed{"COPY"}, ctrl.UIDCopy(z.CopyRequest)
   }
   return nil, fmt.Errorf("unknown command")
-}
-
-type Responder interface {
-  Respond(*ResponseWriter)
-}
-
-type completed struct {
-  name string
-}
-func (s completed) Respond(w *ResponseWriter) {
-  w.Taggedf("OK %s Completed", s.name)
-}
-
-type logoutResponse struct {}
-func (l logoutResponse) Respond(w *ResponseWriter) {
-  w.Untagged("* BYE IMAP4rev1 Server logging out")
-  w.Tagged("OK LOGOUT Completed")
-}
-
-// TODO what about large responses?
-type ResponseWriter struct {
-  Tag string
-  w io.Writer
-}
-func (r *ResponseWriter) Untagged(msg string) {
-  fmt.Fprint(r.w, "*")
-  fmt.Fprint(r.w, " ")
-  fmt.Fprint(r.w, msg)
-  fmt.Fprint(r.w, "\r\n")
-}
-func (r *ResponseWriter) Tagged(msg string) {
-  // TODO what if there's an error while writing?
-  fmt.Fprint(r.w, r.Tag)
-  fmt.Fprint(r.w, " ")
-  fmt.Fprint(r.w, msg)
-  fmt.Fprint(r.w, "\r\n")
-}
-
-func (r *ResponseWriter) Untaggedf(msg string, args ...interface{}) {
-  r.Untagged(fmt.Sprintf(msg, args...))
-}
-
-func (r *ResponseWriter) Taggedf(msg string, args ...interface{}) {
-  r.Tagged(fmt.Sprintf(msg, args...))
 }

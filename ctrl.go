@@ -82,7 +82,7 @@ func respondListItems(items []ListItem, w *ResponseWriter) {
     }
 
     w.Untaggedf(
-      `LIST (%s) "%s" "%s`,
+      `LIST (%s) "%s" "%s"`,
       strings.Join(attrs, " "),
       item.Delimiter,
       item.Name,
@@ -122,8 +122,8 @@ type SelectRequest struct {
 type SelectResponse struct {
 }
 func (s *SelectResponse) Respond(w *ResponseWriter) {
-  w.Untagged("10 EXISTS")
-  w.Untagged("5 RECENT")
+  w.Untagged("1 EXISTS")
+  w.Untagged("0 RECENT")
   w.Untagged(`FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
   w.Tagged(`OK [READ-ONLY] SELECT Completed`)
 }
@@ -137,8 +137,8 @@ type ExamineResponse struct {
 }
 
 func (e *ExamineResponse) Respond(w *ResponseWriter) {
-  w.Untagged("10 EXISTS")
-  w.Untagged("5 RECENT")
+  w.Untagged("1 EXISTS")
+  w.Untagged("0 RECENT")
   w.Untagged(`FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
   w.Tagged(`OK [READ-ONLY] EXAMINE Completed`)
 }
@@ -155,11 +155,11 @@ type StatusResponse struct {
 }
 
 func (s *StatusResponse) Respond(w *ResponseWriter) {
-  counts := ""
+  var counts []string
   for k, v := range s.Counts {
-    counts += fmt.Sprintf("%s %d", k, v)
+    counts = append(counts, fmt.Sprintf("%s %d", k, v))
   }
-  w.Untaggedf(`STATUS %s (%s)`, s.Mailbox, counts)
+  w.Untaggedf(`STATUS %s (%s)`, s.Mailbox, strings.Join(counts, " "))
   w.Tagged(`OK STATUS Completed`)
 }
 
@@ -173,6 +173,11 @@ type FetchResponse struct {
 }
 func (f *FetchResponse) Respond(w *ResponseWriter) {
   log.Println("fetch")
+
+  body := "From: \"test from\" <from@nobody.com>\r\nTo: <buchanae@gmail.com>\r\nSubject: Help with your email server\r\nDate: Wed, 03 Oct 2018 21:08:41 -0600\r\nMessage-ID: <a438f673-6ec7-47b1-b291-488d11ed8d10@las1s04mta912.xt.local>\r\n"
+
+  w.Untaggedf("1 FETCH (FLAGS (\\Seen) INTERNALDATE \"17-Jul-1996 02:44:25 -0700\" UID 5 RFC822.SIZE 0 BODY[HEADER.FIELDS (date subject from to cc message-id in-reply-to references x-priority x-uniform-type-identifier x-universally-unique-identifier x-spam-status x-spam-flag received-spf X-Forefront-Antispam-Report)] {%d}\r\n%s\r\n)", len(body), body)
+
   w.Tagged(`OK FETCH Completed`)
 }
 
@@ -248,10 +253,10 @@ type Controller interface {
   Store(*StoreRequest) (*StoreResponse, error)
   Append(*AppendRequest) error
 
-  //UIDFetch()
-  //UIDStore()
-  //UIDCopy()
-  //UIDSearch()
+  UIDFetch(*FetchRequest) (*FetchResponse, error)
+  UIDStore(*StoreRequest) (*StoreResponse, error)
+  UIDCopy(*CopyRequest) error
+  UIDSearch(*SearchRequest) (*SearchResponse, error)
 }
 
 

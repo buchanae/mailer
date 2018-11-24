@@ -339,12 +339,35 @@ func command(r *reader) (cmd commandI, err error) {
 		cmd = copy_(r, tag)
 	case "store":
 		cmd = store(r, tag)
+  case "uid":
+    cmd = uidcmd(r, tag)
   default:
 	  fail(fmt.Sprintf("unrecognized command %q", k), r)
 	}
 
   err = nil
   return
+}
+
+func uidcmd(r *reader, tag string) commandI {
+  space(r)
+
+  k, ok := keyword(r, "fetch", "store", "search", "copy")
+  if !ok {
+    fail("expected uid command", r)
+  }
+
+  switch k {
+  case "fetch":
+    return uidFetch{fetch(r, tag)}
+  case "store":
+    return uidStore{store(r, tag)}
+  case "search":
+    return uidSearch{search(r, tag)}
+  case "copy":
+    return uidCopy{copy_(r, tag)}
+  }
+  return nil
 }
 
 // TODO keyword always takes characters from the reader,
