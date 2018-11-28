@@ -9,14 +9,32 @@ import (
   "os"
   "strings"
   "github.com/kr/pretty"
+  "github.com/buchanae/mailer/model"
 )
 
-type ConnectionState struct {
-  Mailbox string
-  Authenticated bool
+
+/*
+Thoughts on continuations and multi-step commands:
+
+- authenticate uses this for challenge/response
+- literals apparently require this
+- when does a client send really large literals?
+  this could be useful to switch to a reader, instead
+  of buffering a 10MB message in memory (with attachments)
+- looks like the IDLE extension sends the continuation
+*/
+
+func init() {
+	log.SetFlags(0)
 }
 
 func main() {
+
+  db, err := model.Open("mailer.db")
+  if err != nil {
+    log.Fatalln("failed to open db", err)
+  }
+  defer db.Close()
 
   ln, err := net.Listen("tcp", "localhost:9855")
   if err != nil {
@@ -30,22 +48,23 @@ func main() {
     if err != nil {
       log.Fatalln("failed to accept", err)
     }
-    go handleConn(conn)
+    go handleConn(conn, db)
   }
 }
 
-func handleConn(conn io.ReadWriteCloser) {
-  ctrl := &fake{}
+func handleConn(conn io.ReadWriteCloser, db *model.DB) {
+  ctrl := &fake{db: db}
 
   log.Println("connection opened")
-  all := &bytes.Buffer{}
   defer conn.Close()
 
   m := io.MultiWriter(conn, os.Stderr)
   w := &ResponseWriter{Tag: "*", w: m}
   w.Untagged("OK IMAP4rev1 server ready")
 
+  all := &bytes.Buffer{}
   t := io.TeeReader(conn, all)
+
   r := newReader(t)
 
   for {
@@ -65,7 +84,7 @@ func handleConn(conn io.ReadWriteCloser) {
 
     w.Tag = "*"
     if x != nil {
-      w.Tag = x.requestTag()
+      w.Tag = x.IMAPTag()
     }
 
     if err != nil {
@@ -93,56 +112,41 @@ func handleConn(conn io.ReadWriteCloser) {
   }
 }
 
-func handleCommand(cmd commandI, ctrl Controller) (Responder, error) {
+func handleCommand(cmd imap.Command, ctrl Controller) (Responder, error) {
   switch z := cmd.(type) {
 
-  case *noopRequest:
-    return ctrl.Noop()
+  case *NoopRequest:
+    return ctrl.Noop(z)
 
-  case *checkRequest:
-    return completed{"CHECK"}, ctrl.Check()
+  case *CheckRequest:
+    return ctrl.Check(z)
 
-  case *capabilityRequest:
-    return ctrl.Capability()
+  case *CapabilityRequest:
+    return ctrl.Capability(z)
 
-  case *expungeRequest:
-    return ctrl.Expunge()
+  case *ExpungeRequest:
+    return ctrl.Expunge(z)
 
   case *LoginRequest:
-    return completed{"LOGIN"}, ctrl.Login(z)
+    return ctrl.Login(z)
 
-  case *logoutRequest:
-    err := ctrl.Logout()
-    return logoutResponse{}, err
+  case *LogoutRequest:
+    return ctrl.Logout(z)
 
   case *AuthenticateRequest:
-    err := ctrl.Authenticate(z)
-    _ = err
-    return nil, fmt.Errorf("authenticate is not implemented")
-    /*
-    TODO auth is difficult because it's a multi-step
-         challenge/response
-    if z.authType == "PLAIN" {
-      wr("+")
-      tok := base64(r)
-      crlf(r)
-      log.Println("AUTH TOK", tok)
-    }
-    */
+    return ctrl.Authenticate(z)
 
-  case *startTLSRequest:
-    err := ctrl.StartTLS()
-    _ = err
-    return nil, fmt.Errorf("startTLS is not implemented")
+  case *StartTLSRequest:
+    return ctrl.StartTLS(z)
 
   case *CreateRequest:
-    return completed{"CREATE"}, ctrl.Create(z)
+    return ctrl.Create(z)
 
   case *RenameRequest:
-    return completed{"RENAME"}, ctrl.Rename(z)
+    return ctrl.Rename(z)
 
   case *DeleteRequest:
-    return completed{"DELETE"}, ctrl.Delete(z)
+    return ctrl.Delete(z)
 
   case *ListRequest:
     return ctrl.List(z)
@@ -151,16 +155,16 @@ func handleCommand(cmd commandI, ctrl Controller) (Responder, error) {
     return ctrl.Lsub(z)
 
   case *SubscribeRequest:
-    return completed{"SUBSCRIBE"}, ctrl.Subscribe(z)
+    return ctrl.Subscribe(z)
 
   case *UnsubscribeRequest:
-    return completed{"UNSUBSCRIBE"}, ctrl.Unsubscribe(z)
+    return ctrl.Unsubscribe(z)
 
   case *SelectRequest:
     return ctrl.Select(z)
 
-  case *closeRequest:
-    return completed{"CLOSE"}, ctrl.Close()
+  case *CloseRequest:
+    return ctrl.Close(z)
 
   case *ExamineRequest:
     return ctrl.Examine(z)
@@ -175,7 +179,7 @@ func handleCommand(cmd commandI, ctrl Controller) (Responder, error) {
     return ctrl.Search(z)
 
   case *CopyRequest:
-    return completed{"COPY"}, ctrl.Copy(z)
+    return ctrl.Copy(z)
 
   case *StoreRequest:
     return ctrl.Store(z)
@@ -183,19 +187,19 @@ func handleCommand(cmd commandI, ctrl Controller) (Responder, error) {
   // TODO server needs to send command in order to accept
   //      literal data for some commands, such as append.
   case *AppendRequest:
-    return completed{"APPEND"}, ctrl.Append(z)
+    return ctrl.Append(z)
 
-  case uidFetch:
+  case *UIDFetch:
     return ctrl.UIDFetch(z.FetchRequest)
 
-  case uidStore:
+  case *UIDStore:
     return ctrl.UIDStore(z.StoreRequest)
 
-  case uidSearch:
+  case *UIDSearch:
     return ctrl.UIDSearch(z.SearchRequest)
 
-  case uidCopy:
-    return completed{"COPY"}, ctrl.UIDCopy(z.CopyRequest)
+  case *UIDCopy:
+    return ctrl.UIDCopy(z.CopyRequest)
   }
   return nil, fmt.Errorf("unknown command")
 }

@@ -1,6 +1,14 @@
 package main
 
-type fake struct {}
+import (
+  "fmt"
+  "github.com/buchanae/mailer/model"
+)
+
+type fake struct {
+  Mailbox string
+  db *model.DB
+}
 
 func (*fake) Noop() (*NoopResponse, error) {
   return &NoopResponse{}, nil
@@ -37,11 +45,11 @@ func (*fake) Authenticate(*AuthenticateRequest) error {
       log.Println("AUTH TOK", tok)
     }
     */
-  return nil
+  return nil, fmt.Errorf("authenticate is not implemented")
 }
 
 func (*fake) StartTLS() error {
-  return nil
+  return nil, fmt.Errorf("startTLS is not implemented")
 }
 
 func (*fake) Create(*CreateRequest) error {
@@ -105,14 +113,50 @@ func (*fake) Status(r *StatusRequest) (*StatusResponse, error) {
     Counts: map[string]int{
       "MESSAGES": 1,
       "UIDNEXT": 6,
-      "UIDVALIDITY": 4,
+      "UIDVALIDITY": 1,
       "UNSEEN": 0,
     },
   }, nil
 }
 
-func (*fake) Fetch(*FetchRequest) (*FetchResponse, error) {
-  return &FetchResponse{}, nil
+func (*fake) setSeen(msg *Message) {}
+
+func (f *fake) Fetch(req *FetchRequest) (*FetchResponse, error) {
+  resp := &FetchResponse{}
+
+  for _, offset := range req.Seqs.Range() {
+    msg, err := fake.db.MessageAtOffset(offset)
+    if err != nil {
+      return nil, fmt.Errorf("retrieving message range: %v", err)
+    }
+
+    item, err := fake.fetch(offset, msg, req)
+    if err != nil {
+      return nil, err
+    }
+
+    resp.Items = append(resp.Items, item)
+  }
+
+  return resp, nil
+}
+
+func (f *fake) fetch(id int, msg *Message, req *FetchRequest) (*FetchItem, error) {
+  if shouldLoadText(req.Attrs) {
+    text, err := fake.db.MessageText(msg.ID)
+    if err != nil {
+      return nil, err
+    }
+    msg.Text = text
+  }
+
+  if shouldSetSeen(req.Attrs) {
+    err := f.setSeen(msg.ID)
+    if err != nil {
+      return nil, err
+    }
+  }
+  return FetchItem{ID: id, Fields: fetchFields(msg, req.Attrs)}
 }
 
 func (*fake) Search(*SearchRequest) (*SearchResponse, error) {
@@ -132,7 +176,23 @@ func (*fake) Append(*AppendRequest) error {
 }
 
 func (*fake) UIDFetch(*FetchRequest) (*FetchResponse, error) {
-  return &FetchResponse{}, nil
+  resp := &FetchResponse{}
+
+  for _, id := range req.Seqs.Range() {
+    msg, err := fake.db.Message(id)
+    if err != nil {
+      return nil, fmt.Errorf("retrieving message range: %v", err)
+    }
+
+    item, err := fake.fetch(id, msg, req)
+    if err != nil {
+      return nil, err
+    }
+
+    resp.Items = append(resp.Items, item)
+  }
+
+  return resp, nil
 }
 
 func (*fake) UIDCopy(*CopyRequest) error {

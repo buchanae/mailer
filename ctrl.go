@@ -2,7 +2,6 @@ package main
 
 import (
   "fmt"
-  "log"
   "strings"
 )
 
@@ -99,6 +98,7 @@ type LsubRequest struct {
 type LsubResponse struct {
   Items []ListItem
 }
+
 func (l *LsubResponse) Respond(w *ResponseWriter) {
   respondListItems(l.Items, w)
   w.Tagged(`OK LSUB Completed`)
@@ -117,14 +117,67 @@ type UnsubscribeRequest struct {
 type SelectRequest struct {
   tag string
   Mailbox string
+  Flags Flags
+}
+
+func (f *Flags) String() string {
+  var parts []string
+  if f.Seen {
+    parts = append(parts, `\Seen`)
+  }
+  if f.Answered {
+    parts = append(parts, `\Answered`)
+  }
+  if f.Flagged {
+    parts = append(parts, `\Flagged`)
+  }
+  if f.Deleted {
+    parts = append(parts, `\Deleted`)
+  }
+  if f.Draft {
+    parts = append(parts, `\Draft`)
+  }
+  if f.Recent {
+    parts = append(parts, `\Recent`)
+  }
+  return "(" + strings.Join(parts, " ") + ")"
 }
 
 type SelectResponse struct {
+  Exists int
+  Recent int
+  Unseen int
+  UIDNext int
+  UIDValidity int
+  PermanentFlags Flags
+  Flags Flags
+  ReadWrite bool
 }
+
 func (s *SelectResponse) Respond(w *ResponseWriter) {
   w.Untagged("1 EXISTS")
   w.Untagged("0 RECENT")
-  w.Untagged(`FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`)
+  w.Untaggedf(`FLAGS %s`, s.Flags)
+  w.Tagged(`OK [READ-ONLY] SELECT Completed`)
+}
+
+func (s *SelectResponse) MarshalIMAP() ([]byte, error) {
+  var b response
+  b.untagged("%d EXISTS", s.Exists)
+  b.untagged("%d RECENT", s.Recent)
+  b.untagged("FLAGS %s", s.Flags)
+  if s.ReadWrite {
+    b.tagged("OK [READ-WRITE] SELECT Completed")
+  } else {
+    b.tagged("OK [READ-ONLY] SELECT Completed")
+  }
+  return b.finalize()
+}
+
+func (s *SelectResponse) Respond(w *ResponseWriter) {
+  w.Untagged("1 EXISTS")
+  w.Untagged("0 RECENT")
+  w.Untaggedf(`FLAGS %s`, s.Flags)
   w.Tagged(`OK [READ-ONLY] SELECT Completed`)
 }
 
@@ -133,8 +186,7 @@ type ExamineRequest struct {
   Mailbox string
 }
 
-type ExamineResponse struct {
-}
+type ExamineResponse struct {}
 
 func (e *ExamineResponse) Respond(w *ResponseWriter) {
   w.Untagged("1 EXISTS")
@@ -165,24 +217,38 @@ func (s *StatusResponse) Respond(w *ResponseWriter) {
 
 type FetchRequest struct {
   tag string
-  Seqs []seq
+  Seqs []Sequence
   Attrs []*fetchAttrNode
 }
 
-type FetchResponse struct {
+type FetchItem struct {
+  ID int
+  Fields map[string]string
 }
+
+func (f *FetchItem) Respond(w *ResponseWriter) {
+  var fields []string
+  for k, v := range f.Fields {
+    fields = append(fields, fmt.Sprintf("%s %s", k, v))
+  }
+  x := strings.Join(fields, " ")
+  w.Untaggedf("%d FETCH (%s)", f.ID, x)
+}
+
+type FetchResponse struct {
+  Items []FetchItem
+}
+
 func (f *FetchResponse) Respond(w *ResponseWriter) {
-  log.Println("fetch")
-
-  body := "From: \"test from\" <from@nobody.com>\r\nTo: <buchanae@gmail.com>\r\nSubject: Help with your email server\r\nDate: Wed, 03 Oct 2018 21:08:41 -0600\r\nMessage-ID: <a438f673-6ec7-47b1-b291-488d11ed8d10@las1s04mta912.xt.local>\r\n"
-
-  w.Untaggedf("1 FETCH (FLAGS (\\Seen) INTERNALDATE \"17-Jul-1996 02:44:25 -0700\" UID 5 RFC822.SIZE 0 BODY[HEADER.FIELDS (date subject from to cc message-id in-reply-to references x-priority x-uniform-type-identifier x-universally-unique-identifier x-spam-status x-spam-flag received-spf X-Forefront-Antispam-Report)] {%d}\r\n%s\r\n)", len(body), body)
-
+  for _, item := range f.Items {
+    item.Respond(w)
+  }
   w.Tagged(`OK FETCH Completed`)
 }
 
 type ExpungeResponse struct {
 }
+
 func (e *ExpungeResponse) Respond(w *ResponseWriter) {}
 
 type SearchRequest struct {
@@ -203,6 +269,7 @@ type CopyRequest struct {
 
 type StoreRequest struct {
   tag string
+
   plusMinus string
   seqs []seq
   key string
@@ -258,13 +325,4 @@ type Controller interface {
   UIDCopy(*CopyRequest) error
   UIDSearch(*SearchRequest) (*SearchResponse, error)
 }
-
-
-
-
-
-
-
-
-
 

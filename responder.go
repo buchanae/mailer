@@ -9,8 +9,6 @@ type Responder interface {
   Respond(*ResponseWriter)
 }
 
-
-
 type completed struct {
   name string
 }
@@ -31,12 +29,14 @@ type ResponseWriter struct {
   Tag string
   w io.Writer
 }
+
 func (r *ResponseWriter) Untagged(msg string) {
   fmt.Fprint(r.w, "*")
   fmt.Fprint(r.w, " ")
   fmt.Fprint(r.w, msg)
   fmt.Fprint(r.w, "\r\n")
 }
+
 func (r *ResponseWriter) Tagged(msg string) {
   // TODO what if there's an error while writing?
   fmt.Fprint(r.w, r.Tag)
