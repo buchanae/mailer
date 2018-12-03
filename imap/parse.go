@@ -565,20 +565,9 @@ func base64(r *reader) string {
 	return str
 }
 
-func seqNumber(r *reader) *int {
-  if discard(r, '*') {
-    a := 0
-    return &a
-	}
-	n, ok := nzNumber(r)
-  if !ok {
-	  fail("expected seq number", r)
-	}
-  return &n
-}
-
 type Sequence struct {
-	start, end *int
+	Start, End int
+  IsRange bool
 }
 
 func seqSet(r *reader) []Sequence {
@@ -586,11 +575,12 @@ func seqSet(r *reader) []Sequence {
 
 	for {
 		s := Sequence{
-      start: seqNumber(r),
+      Start: seqNumber(r),
     }
 
     if discard(r, ':') {
-			s.end = seqNumber(r)
+      s.IsRange = true
+			s.End = seqNumber(r)
 		}
 		seqs = append(seqs, s)
 
@@ -599,6 +589,17 @@ func seqSet(r *reader) []Sequence {
 		}
 	}
 	return seqs
+}
+
+func seqNumber(r *reader) int {
+  if discard(r, '*') {
+    return 0
+	}
+	n, ok := nzNumber(r)
+  if !ok {
+	  fail("expected seq number", r)
+	}
+  return n
 }
 
 func section(r *reader, name string) *FetchAttr {
@@ -779,10 +780,10 @@ func store(r *reader, tag string) *StoreCommand {
 
 	return &StoreCommand{
 		Tag:       tag,
-		plusMinus: plusMinus,
-		seqs:      seqs,
-		key:       k,
-		flags:     f,
+		PlusMinus: plusMinus,
+		Seqs:      seqs,
+		Key:       k,
+		Flags:     f,
 	}
 }
 

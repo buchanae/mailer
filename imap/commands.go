@@ -110,10 +110,10 @@ type CopyCommand struct {
 type StoreCommand struct {
   Tag string
 
-  plusMinus string
-  seqs []Sequence
-  key string
-  flags []string
+  PlusMinus string
+  Seqs []Sequence
+  Key string
+  Flags []string
 }
 
 type AppendCommand struct {

@@ -134,11 +134,29 @@ func (f *fake) Status(cmd *imap.StatusCommand) {
 }
 
 func (f *fake) Fetch(cmd *imap.FetchCommand) {
-  for _, offset := range cmd.Seqs.Range() {
-    msg, err := f.db.MessageAtOffset(offset)
+  for _, seq := range cmd.Seqs {
+    // The range can be a single ID, a range of IDs (e.g. 1:100),
+    // or a range with a start and no end (e.g. 1:*).
+    limit := 1
+    if seq.IsRange && seq.End > seq.Start {
+      limit = seq.End - seq.Start
+    }
+
+    // TODO could make this a streaming iterator if needed.
+    msgs, err := f.db.MessageRange(seq.Start, limit)
     if err != nil {
       imap.No(f.w, cmd.Tag, "database error: retrieving message: %v", err)
       return
+    }
+
+    for i, msg := range msgs {
+      id := seq.Start + i
+
+      err := f.fetch(id, msg, cmd)
+      if err != nil {
+        imap.No(f.w, cmd.Tag, "error: building fetch result: %v", err)
+        // TODO return or continue?
+      }
     }
   }
 
@@ -147,6 +165,7 @@ func (f *fake) Fetch(cmd *imap.FetchCommand) {
 
 func (f *fake) UIDFetch(cmd *imap.FetchCommand) {
 
+  /*
   for _, id := range cmd.Seqs.Range() {
     msg, err := f.db.Message(id)
     if err != nil {
@@ -160,6 +179,7 @@ func (f *fake) UIDFetch(cmd *imap.FetchCommand) {
       // TODO return or continue?
     }
   }
+  */
 
   imap.Complete(f.w, cmd.Tag, "UID FETCH")
 }

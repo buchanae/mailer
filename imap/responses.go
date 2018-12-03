@@ -53,13 +53,32 @@ const (
 
 type Flag string
 const (
-  Seen Flag = `\Seen`
-  Answered = `\Answered`
-  Flagged = `\Flagged`
-  Deleted = `\Deleted`
-  Draft = `\Draft`
-  Recent = `\Recent`
+  Seen Flag = `\seen`
+  Answered = `\answered`
+  Flagged = `\flagged`
+  Deleted = `\deleted`
+  Draft = `\draft`
+  Recent = `\recent`
 )
+
+func LookupFlag(s string) Flag {
+  switch Flag(strings.ToLower(s)) {
+  case Seen:
+    return Seen
+  case Answered:
+    return Answered
+  case Flagged:
+    return Flagged
+  case Deleted:
+    return Deleted
+  case Draft:
+    return Draft
+  case Recent:
+    return Recent
+  default:
+    return Flag(strings.ToLower(s))
+  }
+}
 
 func FlagsLine(w io.Writer, flags ...Flag) {
   var s []string

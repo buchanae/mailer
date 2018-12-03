@@ -9,15 +9,8 @@ create table if not exists message (
 
   size integer not null,
 
-  seen integer not null,
-  answered integer not null,
-  flagged integer not null,
-  deleted integer not null,
-  draft integer not null,
-  recent integer not null,
-
   created datetime not null,
-  content blob not null
+  text_path text not null
 );
 
 create table if not exists header (
@@ -28,6 +21,14 @@ create table if not exists header (
 );
 
 create index if not exists header_key_index on header (key);
+
+create table if not exists flag (
+  message_id integer not null references message(id) on delete cascade on update cascade,
+
+  value text not null,
+
+  primary key (message_id, value collate nocase)
+);
 
 create table if not exists mailbox (
   id integer not null primary key autoincrement,

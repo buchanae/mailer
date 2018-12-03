@@ -15,8 +15,8 @@ type Mailbox struct {
 }
 
 type Message struct {
-  ID int
-  Size int
+  ID int64
+  Size int64
   Created time.Time
   Flags []imap.Flag
   Headers Headers
