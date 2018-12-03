@@ -6,142 +6,93 @@ import (
   "strings"
 )
 
+const TimeFormat = "02-Jan-2006 15:04:05 -0700"
+
 type Encoder interface {
-  EncodeIMAP(io.Writer) error
+  EncodeIMAP(io.Writer)
 }
 
-type NoopResponse struct {
-  Tag string
+func Encode(w io.Writer, e Encoder) {
+  e.EncodeIMAP(w)
 }
 
-func (n *NoopResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.Complete(n.Tag, "NOOP")
-  return e.err
+func Literal(w io.Writer, s string) {
+  fmt.Fprintf(w, "{%d}\r\n%s", len(s), s)
 }
 
-type CreateResponse struct {
-  Tag string
+// IMAP "NO" is the response for a command error.
+func No(w io.Writer, tag string, msg string, args ...interface{}) {
+  fmt.Fprintf(w, "%s NO ", tag)
+  fmt.Fprintf(w, msg + "\r\n", args...)
 }
 
-func (n *CreateResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.Complete(n.Tag, "CREATE")
-  return e.err
+// Line writes a formatted string to the underlying writer,
+// with an IMAP-style newline (carriage return + line feed) appended.
+func Line(w io.Writer, msg string, args ...interface{}) {
+  fmt.Fprintf(w, msg + "\r\n", args...)
 }
 
-type DeleteResponse struct {
-  Tag string
+// Complete writes a "{tag} OK {command name} Completed" line,
+// e.g. "a.001 OK SELECT Completed"
+func Complete(w io.Writer, tag, name string) {
+  Line(w, "%s OK %s Completed", tag, name)
 }
 
-func (n *DeleteResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.Complete(n.Tag, "DELETE")
-  return e.err
+func Capability(w io.Writer, tag string, list []string) {
+  Line(w, "* CAPABILITY IMAP4rev1 %s", strings.Join(list, " "))
+  Complete(w, tag, "CAPABILITY")
 }
 
-type RenameResponse struct {
-  Tag string
-}
+type ListAttr string
+const (
+  NoSelect ListAttr  = `\Noselect`
+  NoInferiors = `\Noinferiors`
+  Marked = `\Marked`
+  Unmarked = `\Unmarked`
+)
 
-func (n *RenameResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.Complete(n.Tag, "RENAME")
-  return e.err
-}
+type Flag string
+const (
+  Seen Flag = `\Seen`
+  Answered = `\Answered`
+  Flagged = `\Flagged`
+  Deleted = `\Deleted`
+  Draft = `\Draft`
+  Recent = `\Recent`
+)
 
-type LoginResponse struct {
-  Tag string
-}
-
-func (n *LoginResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.Complete(n.Tag, "LOGIN")
-  return e.err
-}
-
-type CheckResponse struct {
-  Tag string
-}
-
-func (c *CheckResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.Complete(c.Tag, "CHECK")
-  return e.err
-}
-
-type CapabilityResponse struct {
-  Tag string
-  Capabilities []string
-}
-
-func (c *CapabilityResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.L("* CAPABILITY IMAP4rev1")
-  e.Complete(c.Tag, "CAPABILITY")
-  return e.err
-}
-
-type ListResponse struct {
-  Tag string
-  Items []ListItem
-}
-
-func (l *ListResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  for _, item := range l.Items {
-    e.L(`* LIST (%s) "%s" "%s"`,
-      joinItemAttrs(item),
-      item.Delimiter,
-      item.Name,
-    )
+func FlagsLine(w io.Writer, flags ...Flag) {
+  var s []string
+  for _, flag := range flags {
+    s = append(s, string(flag))
   }
-  e.Complete(l.Tag, "LIST")
-  return e.err
+  Line(w, "* FLAGS (%s)", strings.Join(s, " "))
 }
 
-type ListItem struct {
-  NoSelect, NoInferiors, Marked, Unmarked bool
-  Delimiter string
-  Name string
-}
-
-type LsubResponse struct {
-  Tag string
-  Items []ListItem
-}
-
-func (l *LsubResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  for _, item := range l.Items {
-    e.L(`* LSUB (%s) "%s" "%s"`,
-      joinItemAttrs(item),
-      item.Delimiter,
-      item.Name,
-    )
+func LsubItem(w io.Writer, name, delimiter string, attrs ...ListAttr) {
+  var s []string
+  for _, attr := range attrs {
+    s = append(s, string(attr))
   }
-  e.Complete(l.Tag, "LSUB")
-  return e.err
+
+  Line(w, `* LSUB (%s) "%s" "%s"`,
+    strings.Join(s, " "),
+    delimiter,
+    name,
+  )
 }
 
-type SubscribeResponse struct {
-  Tag string
-}
+func ListItem(w io.Writer, name, delimiter string, attrs ...ListAttr) {
+  var s []string
+  for _, attr := range attrs {
+    s = append(s, string(attr))
+  }
 
-func (s *SubscribeResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.Complete(s.Tag, "SUBSCRIBE")
-  return e.err
-}
-
-type UnsubscribeResponse struct {
-  Tag string
-}
-
-func (s *UnsubscribeResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.Complete(s.Tag, "UNSUBSCRIBE")
-  return e.err
+  Line(w, `* LIST (%s) "%s" "%s"`,
+    strings.Join(s, " "),
+    delimiter,
+    name,
+  )
 }
 
 type SelectResponse struct {
@@ -151,27 +102,25 @@ type SelectResponse struct {
   Unseen int
   UIDNext int
   UIDValidity int
-  Flags Flags
+  Flags []Flag
   ReadWrite bool
 }
 
-func (s *SelectResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.L("* %d EXISTS", s.Exists)
-  e.L("* %d RECENT", s.Recent)
-  e.L("* FLAGS %s", formatFlags(s.Flags))
-  e.L("* OK [UNSEEN %d]", s.Unseen)
+func (s *SelectResponse) EncodeIMAP(w io.Writer) {
+  Line(w, "* %d EXISTS", s.Exists)
+  Line(w, "* %d RECENT", s.Recent)
+  FlagsLine(w, s.Flags...)
+  Line(w, "* OK [UNSEEN %d]", s.Unseen)
   // TODO determine the best permanent flags.
-  e.L(`* OK [PERMANENTFLAGS (\Seen \Deleted)`)
-  e.L("* OK [UIDNEXT %d]", s.UIDNext)
-  e.L("* OK [UIDVALIDITY %d]", s.UIDValidity)
+  Line(w, `* OK [PERMANENTFLAGS (\Seen \Deleted)]`)
+  Line(w, "* OK [UIDNEXT %d]", s.UIDNext)
+  Line(w, "* OK [UIDVALIDITY %d]", s.UIDValidity)
 
   if s.ReadWrite {
-    e.L("%s OK [READ-WRITE] SELECT Completed", s.Tag)
+    Line(w, "%s OK [READ-WRITE] SELECT Completed", s.Tag)
   } else {
-    e.L("%s OK [READ-ONLY] SELECT Completed", s.Tag)
+    Line(w, "%s OK [READ-ONLY] SELECT Completed", s.Tag)
   }
-  return e.err
 }
 
 type ExamineResponse struct {
@@ -181,20 +130,18 @@ type ExamineResponse struct {
   Unseen int
   UIDNext int
   UIDValidity int
-  Flags Flags
+  Flags []Flag
 }
 
-func (s *ExamineResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.L("* %d EXISTS", s.Exists)
-  e.L("* %d RECENT", s.Recent)
-  e.L("* FLAGS %s", formatFlags(s.Flags))
-  e.L("* OK [UNSEEN %d]", s.Unseen)
-  e.L(`* OK [PERMANENTFLAGS ()`)
-  e.L("* OK [UIDNEXT %d]", s.UIDNext)
-  e.L("* OK [UIDVALIDITY %d]", s.UIDValidity)
-  e.L("%s OK [READ-ONLY] SELECT Completed", s.Tag)
-  return e.err
+func (s *ExamineResponse) EncodeIMAP(w io.Writer) {
+  Line(w, "* %d EXISTS", s.Exists)
+  Line(w, "* %d RECENT", s.Recent)
+  FlagsLine(w, s.Flags...)
+  Line(w, "* OK [UNSEEN %d]", s.Unseen)
+  Line(w, `* OK [PERMANENTFLAGS ()`)
+  Line(w, "* OK [UIDNEXT %d]", s.UIDNext)
+  Line(w, "* OK [UIDVALIDITY %d]", s.UIDValidity)
+  Line(w, "%s OK [READ-ONLY] SELECT Completed", s.Tag)
 }
 
 type StatusResponse struct {
@@ -203,70 +150,88 @@ type StatusResponse struct {
   Counts map[string]int
 }
 
-func (s *StatusResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-
+func (s *StatusResponse) EncodeIMAP(w io.Writer) {
   var counts []string
   for k, v := range s.Counts {
     counts = append(counts, fmt.Sprintf("%s %d", k, v))
   }
 
-  e.L("* STATUS %s (%s)", s.Mailbox, strings.Join(counts, " "))
-  e.Complete(s.Tag, "STATUS")
-  return e.err
+  Line(w, "* STATUS %s (%s)", s.Mailbox, strings.Join(counts, " "))
+  Complete(w, s.Tag, "STATUS")
 }
 
-type FetchResponse struct {
-  Tag string
-  Items []FetchItem
+type item struct {
+  key, value string
+  r io.Reader
+  size int
+  literal bool
 }
 
-func (f *FetchResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
+type FetchResult struct {
+  ID int
+  items []item
+}
 
-  for _, item := range f.Items {
-    var fields []string
-    for k, v := range item.Fields {
-      fields = append(fields, fmt.Sprintf("%s %s", k, v))
+func (f *FetchResult) AddString(key, value string) {
+  f.items = append(f.items, item{key: key, value: value})
+}
+
+func (f *FetchResult) AddLiteral(key, value string) {
+  f.items = append(f.items, item{key: key, value: value, literal: true})
+}
+
+func (f *FetchResult) AddReader(key string, size int, r io.Reader) {
+  f.items = append(f.items, item{key: key, r: r, size: size})
+}
+
+func (f *FetchResult) Encode(w io.Writer) error {
+  fmt.Fprintf(w, "* %d FETCH (", f.ID)
+
+  for i, item := range f.items {
+    fmt.Fprint(w, item.key)
+    fmt.Fprint(w, " ")
+
+    // if there's a reader, copy an IMAP string literal from that.
+    if item.r != nil {
+      fmt.Fprintf(w, "{%d}\r\n")
+      _, err := io.Copy(w, io.LimitReader(item.r, int64(item.size)))
+      if err != nil {
+        return fmt.Errorf("copying item %s: %v", item.key, err)
+      }
+
+    } else {
+      if item.literal {
+        fmt.Fprintf(w, "{%d}\r\n%s", len(item.value), item.value)
+      } else {
+        fmt.Fprint(w, item.value)
+      }
     }
 
-    e.L("* %d FETCH (%s)", item.ID, strings.Join(fields, " "))
+    // Join items with a space
+    if i < len(f.items) - 1 {
+      fmt.Fprint(w, " ")
+    }
   }
-
-  e.Complete(f.Tag, "FETCH")
-  return e.err
+  fmt.Fprint(w, ")\r\n")
+  return nil
 }
 
-type FetchItem struct {
-  ID int
-  Fields map[string]string
-}
-
-type ExpungeResponse struct {
-  Tag string
-  Expunged []int
-}
-
-func (r *ExpungeResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  for _, id := range r.Expunged {
-    e.L("* %d EXPUNGE", id)
+func Expunge(w io.Writer, tag string, ids []int) {
+  for _, id := range ids {
+    Line(w, "* %d EXPUNGE", id)
   }
-  e.Complete(r.Tag, "EXPUNGE")
-  return e.err
+  Complete(w, tag, "EXPUNGE")
 }
 
-type LogoutResponse struct {
+type AuthenticateResponse struct {
   Tag string
 }
 
-func (l *LogoutResponse) EncodeIMAP(w io.Writer) error {
-  e := newEncoder(w)
-  e.L("* BYE IMAP4rev1 Server logging out")
-  e.Complete(l.Tag, "LOGOUT")
-  return e.err
+func (r *AuthenticateResponse) EncodeIMAP(w io.Writer) {
+  Line(w, "%s OK UNKNOWN authentication successful", r.Tag)
 }
 
-type SearchResponse struct {}
-type StoreResponse struct {}
-type AppendResponse struct {}
+func Logout(w io.Writer, tag string) {
+  Line(w, "* BYE IMAP4rev1 Server logging out")
+  Complete(w, tag, "LOGOUT")
+}

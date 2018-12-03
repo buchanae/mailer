@@ -8,8 +8,8 @@ import (
   "net"
   "os"
   "strings"
-  "github.com/kr/pretty"
   "github.com/buchanae/mailer/model"
+  "github.com/buchanae/mailer/imap"
 )
 
 
@@ -53,153 +53,137 @@ func main() {
 }
 
 func handleConn(conn io.ReadWriteCloser, db *model.DB) {
-  ctrl := &fake{db: db}
-
-  log.Println("connection opened")
   defer conn.Close()
 
+  // Set up some connection logging.
   m := io.MultiWriter(conn, os.Stderr)
-  w := &ResponseWriter{Tag: "*", w: m}
-  w.Untagged("OK IMAP4rev1 server ready")
-
   all := &bytes.Buffer{}
   t := io.TeeReader(conn, all)
 
-  r := newReader(t)
+  // Decode IMAP commands from the connection.
+  d := imap.NewCommandDecoder(t)
 
-  for {
+  // Tell the client that the server is ready to begin.
+  // TODO probably move to ctrl.Ready() (or Start or whatever)
+  fmt.Fprintf(m, "* OK IMAP4rev1 server ready\r\n")
+
+  // TODO wrap connection to log errors from Write
+  //      and maybe silently drop writes after the first error?
+  ctrl := &fake{db: db, w: m}
+
+  for ctrl.Ready() && d.Next() {
     all.Reset()
-    r.pos = 0
+    // cmd is expected to always be non-nil;
+    // if nothing else, it's *imap.UnknownCommand{Tag: "*"}
+    cmd := d.Command()
 
-    x, err := command(r)
+    // TODO command handling should probably be async?
+    //      but only some commands are async?
+    switchCommand(cmd, ctrl)
+  }
 
-    if r.err == io.EOF {
-      log.Println("EOF")
-      return
-    }
-    if r.err != nil {
-      log.Println(r.err)
-      return
-    }
+  err := d.Err()
+  if err != nil {
+    log.Println(err)
 
-    w.Tag = "*"
-    if x != nil {
-      w.Tag = x.IMAPTag()
-    }
+    // Log the line received and the last position of the parser.
+    // Useful while writing/debugging the command parser.
+    log.Printf("%s\n", all.String())
+    log.Printf("%s^\n", strings.Repeat(" ", d.LastPos()))
 
-    if err != nil {
-      log.Printf("%s\n", all.String())
-      pad := strings.Repeat(" ", r.pos)
-      log.Printf("%s^\n", pad)
-      log.Println("error", err)
-      w.Taggedf("BAD %s", err)
-      return
-    }
-
-    pretty.Println("CMD:", x)
-
-    // TODO command handling should probably be async
-    resp, err := handleCommand(x, ctrl)
-    if err != nil {
-      w.Taggedf("NO %s", err)
-      continue
-    }
-    resp.Respond(w)
-
-    if _, ok := resp.(logoutResponse); ok {
-      return
-    }
+    // IMAP "BAD" is the response for a bad command (unparseable, unrecognized, etc).
+    // TODO get last command tag?
+    fmt.Fprintf(m, "* BAD %s\r\n", err)
   }
 }
 
-func handleCommand(cmd imap.Command, ctrl Controller) (Responder, error) {
+func switchCommand(cmd imap.Command, ctrl Controller) {
   switch z := cmd.(type) {
 
-  case *NoopRequest:
-    return ctrl.Noop(z)
+  case *imap.NoopCommand:
+    ctrl.Noop(z)
 
-  case *CheckRequest:
-    return ctrl.Check(z)
+  case *imap.CheckCommand:
+    ctrl.Check(z)
 
-  case *CapabilityRequest:
-    return ctrl.Capability(z)
+  case *imap.CapabilityCommand:
+    ctrl.Capability(z)
 
-  case *ExpungeRequest:
-    return ctrl.Expunge(z)
+  case *imap.ExpungeCommand:
+    ctrl.Expunge(z)
 
-  case *LoginRequest:
-    return ctrl.Login(z)
+  case *imap.LoginCommand:
+    ctrl.Login(z)
 
-  case *LogoutRequest:
-    return ctrl.Logout(z)
+  case *imap.LogoutCommand:
+    ctrl.Logout(z)
 
-  case *AuthenticateRequest:
-    return ctrl.Authenticate(z)
+  case *imap.AuthenticateCommand:
+    ctrl.Authenticate(z)
 
-  case *StartTLSRequest:
-    return ctrl.StartTLS(z)
+  case *imap.StartTLSCommand:
+    ctrl.StartTLS(z)
 
-  case *CreateRequest:
-    return ctrl.Create(z)
+  case *imap.CreateCommand:
+    ctrl.Create(z)
 
-  case *RenameRequest:
-    return ctrl.Rename(z)
+  case *imap.RenameCommand:
+    ctrl.Rename(z)
 
-  case *DeleteRequest:
-    return ctrl.Delete(z)
+  case *imap.DeleteCommand:
+    ctrl.Delete(z)
 
-  case *ListRequest:
-    return ctrl.List(z)
+  case *imap.ListCommand:
+    ctrl.List(z)
 
-  case *LsubRequest:
-    return ctrl.Lsub(z)
+  case *imap.LsubCommand:
+    ctrl.Lsub(z)
 
-  case *SubscribeRequest:
-    return ctrl.Subscribe(z)
+  case *imap.SubscribeCommand:
+    ctrl.Subscribe(z)
 
-  case *UnsubscribeRequest:
-    return ctrl.Unsubscribe(z)
+  case *imap.UnsubscribeCommand:
+    ctrl.Unsubscribe(z)
 
-  case *SelectRequest:
-    return ctrl.Select(z)
+  case *imap.SelectCommand:
+    ctrl.Select(z)
 
-  case *CloseRequest:
-    return ctrl.Close(z)
+  case *imap.CloseCommand:
+    ctrl.Close(z)
 
-  case *ExamineRequest:
-    return ctrl.Examine(z)
+  case *imap.ExamineCommand:
+    ctrl.Examine(z)
 
-  case *StatusRequest:
-    return ctrl.Status(z)
+  case *imap.StatusCommand:
+    ctrl.Status(z)
 
-  case *FetchRequest:
-    return ctrl.Fetch(z)
+  case *imap.FetchCommand:
+    ctrl.Fetch(z)
 
-  case *SearchRequest:
-    return ctrl.Search(z)
+  case *imap.SearchCommand:
+    ctrl.Search(z)
 
-  case *CopyRequest:
-    return ctrl.Copy(z)
+  case *imap.CopyCommand:
+    ctrl.Copy(z)
 
-  case *StoreRequest:
-    return ctrl.Store(z)
+  case *imap.StoreCommand:
+    ctrl.Store(z)
 
   // TODO server needs to send command in order to accept
   //      literal data for some commands, such as append.
-  case *AppendRequest:
-    return ctrl.Append(z)
+  case *imap.AppendCommand:
+    ctrl.Append(z)
 
-  case *UIDFetch:
-    return ctrl.UIDFetch(z.FetchRequest)
+  case *imap.UIDFetchCommand:
+    ctrl.UIDFetch(z.FetchCommand)
 
-  case *UIDStore:
-    return ctrl.UIDStore(z.StoreRequest)
+  case *imap.UIDStoreCommand:
+    ctrl.UIDStore(z.StoreCommand)
 
-  case *UIDSearch:
-    return ctrl.UIDSearch(z.SearchRequest)
+  case *imap.UIDSearchCommand:
+    ctrl.UIDSearch(z.SearchCommand)
 
-  case *UIDCopy:
-    return ctrl.UIDCopy(z.CopyRequest)
+  case *imap.UIDCopyCommand:
+    ctrl.UIDCopy(z.CopyCommand)
   }
-  return nil, fmt.Errorf("unknown command")
 }

@@ -4,6 +4,7 @@ import (
   "database/sql"
   _ "github.com/mattn/go-sqlite3"
   "fmt"
+  "github.com/buchanae/mailer/imap"
 )
 
 const MaxBodyBytes = 10000000
@@ -41,6 +42,8 @@ func (db *DB) CreateMailbox(name string) error {
 
 func (db *DB) Message(id int) (*Message, error) {
   msg := &Message{Headers: Headers{}}
+  var seen, answered, flagged, deleted, draft, recent bool
+
   q := `select 
     id,
     size,
@@ -50,7 +53,8 @@ func (db *DB) Message(id int) (*Message, error) {
     flagged,
     deleted,
     draft,
-    recent
+    recent,
+    text_path
   from message where id = ?`
 
   row := db.db.QueryRow(q, id)
@@ -58,15 +62,35 @@ func (db *DB) Message(id int) (*Message, error) {
     &msg.ID,
     &msg.Size,
     &msg.Created,
-    &msg.Flags.Seen,
-    &msg.Flags.Answered,
-    &msg.Flags.Flagged,
-    &msg.Flags.Deleted,
-    &msg.Flags.Draft,
-    &msg.Flags.Recent,
+    &seen,
+    &answered,
+    &flagged,
+    &deleted,
+    &draft,
+    &recent,
+    &msg.TextPath,
   )
   if err != nil {
     return nil, fmt.Errorf("loading message from database: %v", err)
+  }
+
+  if seen {
+    msg.SetFlag(imap.Seen)
+  }
+  if answered {
+    msg.SetFlag(imap.Answered)
+  }
+  if flagged {
+    msg.SetFlag(imap.Flagged)
+  }
+  if deleted {
+    msg.SetFlag(imap.Deleted)
+  }
+  if draft {
+    msg.SetFlag(imap.Draft)
+  }
+  if recent {
+    msg.SetFlag(imap.Recent)
   }
 
   rows, err := db.db.Query(`select key, value from header where message_id = ?`, msg.ID)
@@ -135,6 +159,24 @@ func (db *DB) CreateMail(box *Mailbox, msg *Message) error {
   // TODO probably want to return the created mail ID
   return db.withTx(func() error {
 
+    var seen, answered, flagged, deleted, draft, recent bool
+    for _, flag := range msg.Flags {
+      switch flag {
+      case imap.Seen:
+        seen = true
+      case imap.Answered:
+        answered = true
+      case imap.Flagged:
+        flagged = true
+      case imap.Deleted:
+        deleted = true
+      case imap.Draft:
+        draft = true
+      case imap.Recent:
+        recent = true
+      }
+    }
+
     res, err := db.db.Exec(
     `insert into message(
       mailbox_id,
@@ -149,15 +191,15 @@ func (db *DB) CreateMail(box *Mailbox, msg *Message) error {
       content
     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       box.ID,
-      len(msg.Content),
+      msg.Size,
       msg.Created,
-      msg.Flags.Seen,
-      msg.Flags.Answered,
-      msg.Flags.Flagged,
-      msg.Flags.Deleted,
-      msg.Flags.Draft,
-      msg.Flags.Recent,
-      msg.Content,
+      seen,
+      answered,
+      flagged,
+      deleted,
+      draft,
+      recent,
+      msg.TextPath,
     )
     if err != nil {
       return fmt.Errorf("inserting mail into database: %v", err)

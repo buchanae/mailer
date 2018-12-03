@@ -1,23 +1,18 @@
 package imap
 
-type Flags struct {
-  Seen, Answered, Flagged, Deleted, Draft, Recent bool
-}
-
 type literalNode struct {
   size int
   content string
 }
 
-type fetchAttrNode struct {
-	name string
-  peek bool
-	sec  *sectionNode
-}
-
-type sectionNode struct {
-  msg string
-  headerList []string
+type FetchAttr struct {
+	Name string
+  Headers []string
+  Part []int
+  Partial struct {
+    Start int
+    Max int
+  }
 }
 
 type nstringNode struct {

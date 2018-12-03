@@ -76,7 +76,6 @@ type UnsubscribeCommand struct {
 type SelectCommand struct {
   Tag string
   Mailbox string
-  Flags Flags
 }
 
 type ExamineCommand struct {
@@ -93,7 +92,7 @@ type StatusCommand struct {
 type FetchCommand struct {
   Tag string
   Seqs []Sequence
-  Attrs []*fetchAttrNode
+  Attrs []*FetchAttr
 }
 
 type SearchCommand struct {

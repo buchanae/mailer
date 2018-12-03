@@ -2,6 +2,7 @@ package imap
 
 import (
 	"fmt"
+  "io"
 	"strconv"
 	"strings"
 )
@@ -248,17 +249,28 @@ func keywordStr(r *reader) (string, bool) {
 
 func command(r *reader) (cmd Command, err error) {
   cmd = &UnknownCommand{"*"}
+  var started bool
 
   var tag string
   defer func() {
     if e := recover(); e != nil {
       if x, ok := e.(error); ok {
-        err = x
+        if started {
+          err = io.ErrUnexpectedEOF
+        } else {
+          err = x
+        }
       } else {
         err = fmt.Errorf("%s", e)
       }
     }
   }()
+
+  // Peek one character to detect an io.EOF at the beginning.
+  // If EOF is found at the very beginning, return io.EOF,
+  // otherwise it's converted to an io.ErrUnexpectedEOF (in defer/recover above).
+  r.peek(1)
+  started = true
 
 	if t, ok := takeChars(r, tagChar); ok {
     tag = t
@@ -589,32 +601,39 @@ func seqSet(r *reader) []Sequence {
 	return seqs
 }
 
-func section(r *reader) *sectionNode {
+func section(r *reader, name string) *FetchAttr {
   if !discard(r, '[') {
-    return nil
+    return &FetchAttr{Name: name + "[]"}
   }
 
   if discard(r, ']') {
-		return &sectionNode{}
+    return &FetchAttr{Name: name + "[]"}
 	}
 
-	// TODO section-part is not handled
+  // TODO handle numerical partial of body and body.peek
+  // "BODY" section ["<" number "." nz-number ">"] /
+  // "BODY.PEEK" section ["<" number "." nz-number ">"]
+  // TODO also missing section-part
+  // section-part    = nz-number *("." nz-number
+  // section-spec    = section-msgtext / (section-part ["." section-text])
 
 	k, ok := keyword(r, "header", "header.fields", "header.fields.not", "text")
 	if !ok {
 		fail("expected section keyword", r)
 	}
 
-	sec := &sectionNode{msg: k}
+  attr := &FetchAttr{
+    Name: fmt.Sprintf("%s[%s]", name, k),
+  }
 
 	switch k {
 	case "header.fields", "header.fields.not":
 		space(r)
-		sec.headerList = headerList(r)
+    attr.Headers = headerList(r)
 	}
 
   require(r, "]")
-	return sec
+  return attr
 }
 
 func headerList(r *reader) []string {
@@ -635,7 +654,7 @@ func headerList(r *reader) []string {
 	return names
 }
 
-func fetchAttr(r *reader) *fetchAttrNode {
+func fetchAttr(r *reader) *FetchAttr {
 	k, ok := keyword(r, "all", "full", "fast", "envelope", "flags", "internaldate",
 		"rfc822", "rfc822.header", "rfc822.size", "rfc822.text", "bodystructure", "body",
 		"body.peek", "uid")
@@ -643,67 +662,24 @@ func fetchAttr(r *reader) *fetchAttrNode {
 	  fail("expected fetch keyword", r)
 	}
 
-	n := &fetchAttrNode{name: k}
-
-	switch n.name {
+	switch k {
 	case "body.peek", "body":
-    if n.name == "body.peek" {
-      // TODO maybe move this to a post-processing pass
-      n.name = "body"
-      n.peek = true
-    }
-		n.sec = section(r)
-    n.name += "[" + n.sec.msg + "]"
-		// TODO handle numerical section of body.peek
-		// "BODY" section ["<" number "." nz-number ">"] /
-		// "BODY.PEEK" section ["<" number "." nz-number ">"]
+    return section(r, k)
+  default:
+    return &FetchAttr{Name: k}
 	}
-	return n
 }
 
 func fetch(r *reader, tag string) *FetchCommand {
 	space(r)
 	seqs := seqSet(r)
 	space(r)
-	var attrs []*fetchAttrNode
+	var attrs []*FetchAttr
 
   if discard(r, '(') {
 		for {
 			a := fetchAttr(r)
-
-      // TODO maybe move this to a post-processing pass
-      // Apply macros
-      switch a.name {
-      case "all":
-        // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE)
-        attrs = append(attrs,
-          &fetchAttrNode{name: "flags"},
-          &fetchAttrNode{name: "internaldate"},
-          &fetchAttrNode{name: "rfc822.size"},
-          &fetchAttrNode{name: "envelope"},
-        )
-
-      case "full":
-        // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE)
-        attrs = append(attrs,
-          &fetchAttrNode{name: "flags"},
-          &fetchAttrNode{name: "internaldate"},
-          &fetchAttrNode{name: "rfc822.size"},
-        )
-
-      case "fast":
-        // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY)
-        attrs = append(attrs,
-          &fetchAttrNode{name: "flags"},
-          &fetchAttrNode{name: "internaldate"},
-          &fetchAttrNode{name: "rfc822.size"},
-          &fetchAttrNode{name: "envelope"},
-          &fetchAttrNode{name: "body"},
-        )
-
-      default:
-			  attrs = append(attrs, a)
-      }
+			attrs = append(attrs, a)
 
       if discard(r, ')') {
 				break
