@@ -2,6 +2,7 @@ package model
 
 import (
   "bytes"
+  "strings"
   "io"
   "fmt"
   "os"
@@ -92,7 +93,7 @@ func (h Headers) Format() string {
 func (h Headers) Exclude(keys []string) Headers {
   out := Headers{}
   for key, val := range h {
-    if contains(keys, key) {
+    if h.contains(keys, key) {
       continue
     }
     out[key] = val
@@ -104,7 +105,7 @@ func (h Headers) Exclude(keys []string) Headers {
 func (h Headers) Include(keys []string) Headers {
   out := Headers{}
   for key, val := range h {
-    if !contains(keys, key) {
+    if !h.contains(keys, key) {
       continue
     }
     out[key] = val
@@ -113,9 +114,10 @@ func (h Headers) Include(keys []string) Headers {
 }
 
 // contains returns true if the list contains the given query string.
-func contains(list []string, query string) bool {
+func (h Headers) contains(list []string, query string) bool {
   for _, l := range list {
-    if l == query {
+    // TODO probably a better way to do this
+    if strings.ToLower(l) == strings.ToLower(query) {
       return true
     }
   }

@@ -10,6 +10,7 @@ import (
   "strings"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
+  "github.com/kr/pretty"
 )
 
 
@@ -30,7 +31,7 @@ func init() {
 
 func main() {
 
-  db, err := model.Open("mailer.db")
+  db, err := model.Open("mailer.data")
   if err != nil {
     log.Fatalln("failed to open db", err)
   }
@@ -72,14 +73,16 @@ func handleConn(conn io.ReadWriteCloser, db *model.DB) {
   ctrl := &fake{db: db, w: m}
 
   for ctrl.Ready() && d.Next() {
-    all.Reset()
     // cmd is expected to always be non-nil;
     // if nothing else, it's *imap.UnknownCommand{Tag: "*"}
     cmd := d.Command()
+    pretty.Println(all.String())
+    pretty.Println("CMD", cmd)
 
     // TODO command handling should probably be async?
     //      but only some commands are async?
     switchCommand(cmd, ctrl)
+    all.Reset()
   }
 
   err := d.Err()

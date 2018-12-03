@@ -88,7 +88,7 @@ func (db *DB) DeleteMailbox(name string) error {
   return err
 }
 
-func (db *DB) SetFlags(id int, flags ...imap.Flag) error {
+func (db *DB) SetFlags(id int64, flags ...imap.Flag) error {
   return db.withTx(func(tx *sql.Tx) error {
     for _, flag := range flags {
 
@@ -104,8 +104,102 @@ func (db *DB) SetFlags(id int, flags ...imap.Flag) error {
   })
 }
 
-func (db *DB) MessageRange(offset, limit int) ([]*Message, error) {
-  return nil, fmt.Errorf("database error: message range not implemented")
+func (db *DB) MessageIDRange(mailbox string, start, end int) ([]*Message, error) {
+  var msgs []*Message
+
+  q := `select
+    m.id,
+    m.size,
+    m.created,
+    m.text_path
+  from message as m
+  join mailbox as b
+  on m.mailbox_id = b.id
+  where b.name = ?
+  and m.id >= ?`
+  args := []interface{}{mailbox, start}
+
+  if end > start {
+    q += ` and m.id <= ?`
+    args = append(args, end)
+  }
+
+  rows, err := db.db.Query(q, args...)
+
+  if err != nil {
+    return nil, fmt.Errorf("loading message range: %v", err)
+  }
+  defer rows.Close()
+
+  for rows.Next() {
+    m := &Message{Headers: Headers{}}
+    err := rows.Scan(&m.ID, &m.Size, &m.Created, &m.TextPath)
+    if err != nil {
+      return nil, fmt.Errorf("loading message: %v", err)
+    }
+
+    err = db.loadHeaders(m)
+    if err != nil {
+      return nil, fmt.Errorf("loading message: %v", err)
+    }
+
+    err = db.loadFlags(m)
+    if err != nil {
+      return nil, fmt.Errorf("loading message: %v", err)
+    }
+    msgs = append(msgs, m)
+  }
+
+  if err := rows.Err(); err != nil {
+    return nil, fmt.Errorf("loading message range: %v", err)
+  }
+  return msgs, nil
+}
+
+func (db *DB) MessageRange(mailbox string, offset, limit int) ([]*Message, error) {
+  var msgs []*Message
+  rows, err := db.db.Query(
+    `select
+      m.id,
+      m.size,
+      m.created,
+      m.text_path
+    from message as m
+    join mailbox as b
+    on m.mailbox_id = b.id
+    where b.name = ?
+    limit ? offset ?
+    `,
+    mailbox, limit, offset)
+
+  if err != nil {
+    return nil, fmt.Errorf("loading message range: %v", err)
+  }
+  defer rows.Close()
+
+  for rows.Next() {
+    m := &Message{Headers: Headers{}}
+    err := rows.Scan(&m.ID, &m.Size, &m.Created, &m.TextPath)
+    if err != nil {
+      return nil, fmt.Errorf("loading message: %v", err)
+    }
+
+    err = db.loadHeaders(m)
+    if err != nil {
+      return nil, fmt.Errorf("loading message: %v", err)
+    }
+
+    err = db.loadFlags(m)
+    if err != nil {
+      return nil, fmt.Errorf("loading message: %v", err)
+    }
+    msgs = append(msgs, m)
+  }
+
+  if err := rows.Err(); err != nil {
+    return nil, fmt.Errorf("loading message range: %v", err)
+  }
+  return msgs, nil
 }
 
 func (db *DB) Message(id int) (*Message, error) {

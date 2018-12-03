@@ -5,7 +5,7 @@ var startupSql = `PRAGMA foreign_keys = ON;`
 var schemaSql = `
 create table if not exists message (
   id integer not null primary key autoincrement,
-  mailbox_id integer not null references mailbox(id) on delete restrict on update restrict,
+  mailbox_id integer not null references mailbox(id) on delete cascade on update cascade,
 
   size integer not null,
 

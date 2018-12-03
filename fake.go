@@ -2,14 +2,16 @@ package main
 
 import (
   "fmt"
+  "time"
   "strings"
+  "log"
   "io"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
 )
 
 type fake struct {
-  Mailbox string
+  mailbox string
   db *model.DB
   done bool
   w io.Writer
@@ -91,8 +93,17 @@ func (f *fake) List(cmd *imap.ListCommand) {
   case "":
     imap.ListItem(f.w, "", "/", imap.NoSelect)
 
+  // TODO there's another common wildcard query: "%"
   case "*":
-    imap.ListItem(f.w, "testone", "/")
+    boxes, err := f.db.ListMailboxes()
+    if err != nil {
+      imap.No(f.w, cmd.Tag, "database error: listing mailboxes: %v", err)
+      return
+    }
+
+    for _, box := range boxes {
+      imap.ListItem(f.w, box.Name, "/")
+    }
   }
   imap.Complete(f.w, cmd.Tag, "LIST")
 }
@@ -111,10 +122,17 @@ func (f *fake) Unsubscribe(cmd *imap.UnsubscribeCommand) {
 }
 
 func (f *fake) Select(cmd *imap.SelectCommand) {
-  imap.Encode(f.w, &imap.SelectResponse{})
+  f.mailbox = cmd.Mailbox
+
+  imap.Encode(f.w, &imap.SelectResponse{
+    Tag: cmd.Tag,
+  })
 }
 
 func (f *fake) Close(cmd *imap.CloseCommand) {
+  // TODO delete messages from current mailbox
+  f.mailbox = ""
+  imap.Complete(f.w, cmd.Tag, "CLOSE")
 }
 
 func (f *fake) Examine(cmd *imap.ExamineCommand) {
@@ -123,6 +141,7 @@ func (f *fake) Examine(cmd *imap.ExamineCommand) {
 
 func (f *fake) Status(cmd *imap.StatusCommand) {
   imap.Encode(f.w, &imap.StatusResponse{
+    Tag: cmd.Tag,
     Mailbox: cmd.Mailbox,
     Counts: map[string]int{
       "MESSAGES": 1,
@@ -134,16 +153,23 @@ func (f *fake) Status(cmd *imap.StatusCommand) {
 }
 
 func (f *fake) Fetch(cmd *imap.FetchCommand) {
+  // TODO check connection state. must have a selected mailbox.
+
   for _, seq := range cmd.Seqs {
     // The range can be a single ID, a range of IDs (e.g. 1:100),
     // or a range with a start and no end (e.g. 1:*).
+    //
+    // IMAP IDs are 1-based, meaning "1" is the first message (not "0").
+    offset := seq.Start - 1
     limit := 1
     if seq.IsRange && seq.End > seq.Start {
       limit = seq.End - seq.Start
     }
 
+    log.Println("FETCHING MESSAGE RANGE", offset, limit)
+
     // TODO could make this a streaming iterator if needed.
-    msgs, err := f.db.MessageRange(seq.Start, limit)
+    msgs, err := f.db.MessageRange(f.mailbox, offset, limit)
     if err != nil {
       imap.No(f.w, cmd.Tag, "database error: retrieving message: %v", err)
       return
@@ -151,6 +177,7 @@ func (f *fake) Fetch(cmd *imap.FetchCommand) {
 
     for i, msg := range msgs {
       id := seq.Start + i
+      log.Println("FETCHING MESSAGE", id)
 
       err := f.fetch(id, msg, cmd)
       if err != nil {
@@ -164,22 +191,26 @@ func (f *fake) Fetch(cmd *imap.FetchCommand) {
 }
 
 func (f *fake) UIDFetch(cmd *imap.FetchCommand) {
+  // TODO check connection state. must have a selected mailbox.
+  for _, seq := range cmd.Seqs {
 
-  /*
-  for _, id := range cmd.Seqs.Range() {
-    msg, err := f.db.Message(id)
+    log.Println("FETCHING MESSAGE UID RANGE", seq.Start, seq.End)
+
+    // TODO could make this a streaming iterator if needed.
+    msgs, err := f.db.MessageIDRange(f.mailbox, seq.Start, seq.End)
     if err != nil {
       imap.No(f.w, cmd.Tag, "database error: retrieving message: %v", err)
       return
     }
 
-    err = f.fetch(id, msg, cmd)
-    if err != nil {
-      imap.No(f.w, cmd.Tag, "error: building fetch result: %v", err)
-      // TODO return or continue?
+    for _, msg := range msgs {
+      err := f.fetch(int(msg.ID), msg, cmd)
+      if err != nil {
+        imap.No(f.w, cmd.Tag, "error: building fetch result: %v", err)
+        // TODO return or continue?
+      }
     }
   }
-  */
 
   imap.Complete(f.w, cmd.Tag, "UID FETCH")
 }
@@ -189,7 +220,11 @@ func joinFlags(flags []imap.Flag) string {
   for _, flag := range flags {
     s = append(s, string(flag))
   }
-  return strings.Join(s, " ")
+  return "(" + strings.Join(s, " ") + ")"
+}
+
+func quoteTime(t time.Time) string {
+  return `"` + t.Format(imap.TimeFormat) + `"`
 }
 
 func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand) error {
@@ -202,20 +237,20 @@ func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand) error {
     case "all":
       // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE)
       res.AddString("flags", joinFlags(msg.Flags))
-      res.AddString("internaldate", msg.Created.Format(imap.TimeFormat))
+      res.AddString("internaldate", quoteTime(msg.Created))
       res.AddString("rfc822.size", fmt.Sprint(msg.Size))
       // TODO envelope
 
     case "fast":
       // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE)
       res.AddString("flags", joinFlags(msg.Flags))
-      res.AddString("internaldate", msg.Created.Format(imap.TimeFormat))
+      res.AddString("internaldate", quoteTime(msg.Created))
       res.AddString("rfc822.size", fmt.Sprint(msg.Size))
 
     case "full":
       // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY)
       res.AddString("flags", joinFlags(msg.Flags))
-      res.AddString("internaldate", msg.Created.Format(imap.TimeFormat))
+      res.AddString("internaldate", quoteTime(msg.Created))
       res.AddString("rfc822.size", fmt.Sprint(msg.Size))
       // TODO envelope
       body, err := msg.Body()
@@ -232,7 +267,7 @@ func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand) error {
       res.AddString("flags", joinFlags(msg.Flags))
 
     case "internaldate":
-      res.AddString("internaldate", msg.Created.Format(imap.TimeFormat))
+      res.AddString("internaldate", quoteTime(msg.Created))
 
     case "uid":
       res.AddString("uid", fmt.Sprint(msg.ID))

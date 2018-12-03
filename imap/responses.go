@@ -182,7 +182,7 @@ func (s *StatusResponse) EncodeIMAP(w io.Writer) {
 type item struct {
   key, value string
   r io.Reader
-  size int
+  size int64
   literal bool
 }
 
@@ -199,7 +199,7 @@ func (f *FetchResult) AddLiteral(key, value string) {
   f.items = append(f.items, item{key: key, value: value, literal: true})
 }
 
-func (f *FetchResult) AddReader(key string, size int, r io.Reader) {
+func (f *FetchResult) AddReader(key string, size int64, r io.Reader) {
   f.items = append(f.items, item{key: key, r: r, size: size})
 }
 
@@ -213,7 +213,7 @@ func (f *FetchResult) Encode(w io.Writer) error {
     // if there's a reader, copy an IMAP string literal from that.
     if item.r != nil {
       fmt.Fprintf(w, "{%d}\r\n")
-      _, err := io.Copy(w, io.LimitReader(item.r, int64(item.size)))
+      _, err := io.Copy(w, io.LimitReader(item.r, item.size))
       if err != nil {
         return fmt.Errorf("copying item %s: %v", item.key, err)
       }
