@@ -254,7 +254,7 @@ func (f *fake) Fetch(cmd *imap.FetchCommand) {
     offset := seq.Start - 1
     limit := 1
     if seq.IsRange && seq.End > seq.Start {
-      limit = seq.End - seq.Start
+      limit = seq.End - seq.Start + 1
     }
 
     log.Println("FETCHING MESSAGE RANGE", offset, limit)
@@ -295,7 +295,9 @@ func (f *fake) UIDFetch(cmd *imap.FetchCommand) {
     }
 
     for i, msg := range msgs {
-      err := f.fetch(i, msg, cmd, true)
+      // TODO not sure what a message sequence number is in the context of UID fetch
+      id := i + 1
+      err := f.fetch(id, msg, cmd, true)
       if err != nil {
         imap.No(f.w, cmd.Tag, "error: building fetch result: %v", err)
         // TODO return or continue?
