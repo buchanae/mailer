@@ -5,8 +5,7 @@ import (
   "fmt"
   "log"
   "io"
-  "net"
-  //"os"
+  "crypto/tls"
   "strings"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
@@ -30,6 +29,15 @@ func init() {
 }
 
 func main() {
+  cert, err := tls.LoadX509KeyPair("certificate.pem", "key.pem")
+  if err != nil {
+    log.Fatalln("loading TLS certs", err)
+  }
+
+  tlsconf := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+    InsecureSkipVerify: true,
+  }
 
   db, err := model.Open("mailer.data")
   if err != nil {
@@ -37,7 +45,7 @@ func main() {
   }
   defer db.Close()
 
-  ln, err := net.Listen("tcp", "localhost:9855")
+  ln, err := tls.Listen("tcp", "localhost:9855", tlsconf)
   if err != nil {
     log.Fatalln("failed to listen", err)
   }
