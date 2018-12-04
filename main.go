@@ -5,6 +5,7 @@ import (
   "fmt"
   "log"
   "io"
+  "os"
   "crypto/tls"
   "strings"
   "github.com/buchanae/mailer/model"
@@ -29,6 +30,8 @@ func init() {
 }
 
 func main() {
+  // TODO maybe have a dev mode that generates a cert automatically
+  // https://golang.org/src/crypto/tls/generate_cert.go
   cert, err := tls.LoadX509KeyPair("certificate.pem", "key.pem")
   if err != nil {
     log.Fatalln("loading TLS certs", err)
@@ -52,22 +55,26 @@ func main() {
   defer ln.Close()
   log.Println("listening on localhost:9855")
 
+  // Set up some connection logging.
+  responseLog, err := os.OpenFile("response.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+  if err != nil {
+    log.Fatal(err)
+  }
+  defer responseLog.Close()
+
   for {
     conn, err := ln.Accept()
     if err != nil {
       log.Fatalln("failed to accept", err)
     }
-    go handleConn(conn, db)
+    go handleConn(conn, db, responseLog)
   }
 }
 
-func handleConn(conn io.ReadWriteCloser, db *model.DB) {
+func handleConn(conn io.ReadWriteCloser, db *model.DB, responseLog io.Writer) {
   defer conn.Close()
 
-  // Set up some connection logging.
-  var m io.Writer
-  m = conn
-  //m := io.MultiWriter(conn, os.Stderr)
+  m := io.MultiWriter(conn, responseLog)
   all := &bytes.Buffer{}
   t := io.TeeReader(conn, all)
 

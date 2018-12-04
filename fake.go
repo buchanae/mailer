@@ -2,9 +2,6 @@ package main
 
 import (
   "fmt"
-  "time"
-  "strings"
-  "log"
   "io"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
@@ -59,6 +56,7 @@ func (f *fake) Authenticate(cmd *imap.AuthenticateCommand) {
     */
 }
 
+// TODO https://stackoverflow.com/questions/13110713/upgrade-a-connection-to-tls-in-go
 func (f *fake) StartTLS(cmd *imap.StartTLSCommand) {}
 
 func (f *fake) Create(cmd *imap.CreateCommand) {
@@ -148,9 +146,7 @@ func (f *fake) Select(cmd *imap.SelectCommand) {
     return
   }
 
-
   // TODO flags
-
   imap.Encode(f.w, &imap.SelectResponse{
     Tag: cmd.Tag,
     Exists: exists,
@@ -243,9 +239,7 @@ func (f *fake) Status(cmd *imap.StatusCommand) {
   imap.Encode(f.w, resp)
 }
 
-func (f *fake) Fetch(cmd *imap.FetchCommand) {
-  // TODO check connection state. must have a selected mailbox.
-
+func (f *fake) Store(cmd *imap.StoreCommand) {
   for _, seq := range cmd.Seqs {
     // The range can be a single ID, a range of IDs (e.g. 1:100),
     // or a range with a start and no end (e.g. 1:*).
@@ -257,8 +251,6 @@ func (f *fake) Fetch(cmd *imap.FetchCommand) {
       limit = seq.End - seq.Start + 1
     }
 
-    log.Println("FETCHING MESSAGE RANGE", offset, limit)
-
     // TODO could make this a streaming iterator if needed.
     msgs, err := f.db.MessageRange(f.mailbox, offset, limit)
     if err != nil {
@@ -268,26 +260,20 @@ func (f *fake) Fetch(cmd *imap.FetchCommand) {
 
     for i, msg := range msgs {
       id := seq.Start + i
-      log.Println("FETCHING MESSAGE", id)
 
-      err := f.fetch(id, msg, cmd, false)
+      err := f.store(id, msg, cmd)
       if err != nil {
-        imap.No(f.w, cmd.Tag, "error: building fetch result: %v", err)
+        imap.No(f.w, cmd.Tag, "error: building store result: %v", err)
         // TODO return or continue?
       }
     }
   }
 
-  imap.Complete(f.w, cmd.Tag, "FETCH")
+  imap.Complete(f.w, cmd.Tag, "STORE")
 }
 
-func (f *fake) UIDFetch(cmd *imap.FetchCommand) {
-  // TODO check connection state. must have a selected mailbox.
+func (f *fake) UIDStore(cmd *imap.StoreCommand) {
   for _, seq := range cmd.Seqs {
-
-    log.Println("FETCHING MESSAGE UID RANGE", seq.Start, seq.End)
-
-    // TODO could make this a streaming iterator if needed.
     msgs, err := f.db.MessageIDRange(f.mailbox, seq.Start, seq.End)
     if err != nil {
       imap.No(f.w, cmd.Tag, "database error: retrieving message: %v", err)
@@ -297,181 +283,73 @@ func (f *fake) UIDFetch(cmd *imap.FetchCommand) {
     for i, msg := range msgs {
       // TODO not sure what a message sequence number is in the context of UID fetch
       id := i + 1
-      err := f.fetch(id, msg, cmd, true)
+      err := f.store(id, msg, cmd)
       if err != nil {
-        imap.No(f.w, cmd.Tag, "error: building fetch result: %v", err)
+        imap.No(f.w, cmd.Tag, "error: storing result: %v", err)
         // TODO return or continue?
       }
     }
   }
 
-  imap.Complete(f.w, cmd.Tag, "UID FETCH")
+  imap.Complete(f.w, cmd.Tag, "UID STORE")
 }
 
-func joinFlags(flags []imap.Flag) string {
-  var s []string
-  for _, flag := range flags {
-    s = append(s, string(flag))
-  }
-  return "(" + strings.Join(s, " ") + ")"
-}
+func (f *fake) store(id int, msg *model.Message, cmd *imap.StoreCommand) error {
+  switch cmd.Action {
 
-func quoteTime(t time.Time) string {
-  return `"` + t.Format(imap.TimeFormat) + `"`
-}
-
-func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand, forceUID bool) error {
-  res := imap.FetchResult{ID: id}
-  setSeen := false
-
-  for _, attr := range cmd.Attrs {
-    switch attr.Name {
-
-    case "all":
-      // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE)
-      res.AddString("flags", joinFlags(msg.Flags))
-      res.AddString("internaldate", quoteTime(msg.Created))
-      res.AddString("rfc822.size", fmt.Sprint(msg.Size))
-      // TODO envelope
-
-    case "fast":
-      // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE)
-      res.AddString("flags", joinFlags(msg.Flags))
-      res.AddString("internaldate", quoteTime(msg.Created))
-      res.AddString("rfc822.size", fmt.Sprint(msg.Size))
-
-    case "full":
-      // Macro equivalent to: (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY)
-      res.AddString("flags", joinFlags(msg.Flags))
-      res.AddString("internaldate", quoteTime(msg.Created))
-      res.AddString("rfc822.size", fmt.Sprint(msg.Size))
-      // TODO envelope
-      body, err := msg.Body()
-      if err != nil {
-        return fmt.Errorf("opening message body: %v", err)
-      }
-      defer body.Close()
-      res.AddReader("body[]", msg.Size, body)
-
-    case "envelope":
-      // TODO
-
-    case "flags":
-      res.AddString("flags", joinFlags(msg.Flags))
-
-    case "internaldate":
-      res.AddString("internaldate", quoteTime(msg.Created))
-
-    case "uid":
-      res.AddString("uid", fmt.Sprint(msg.ID))
-
-    case "rfc822":
-      setSeen = true
-      body, err := msg.Body()
-      if err != nil {
-        return fmt.Errorf("opening message body: %v", err)
-      }
-      defer body.Close()
-      res.AddReader("body[]", msg.Size, body)
-
-    case "rfc822.header":
-      res.AddLiteral("body[header]", msg.Headers.Format())
-
-    case "rfc822.text":
-      setSeen = true
-      text, err := msg.Text()
-      if err != nil {
-        return err
-      }
-      defer text.Close()
-      // TODO should be rfc822.text?
-      res.AddReader("body[text]", msg.Size, text)
-
-    case "rfc822.size":
-      res.AddString("rfc822.size", fmt.Sprint(msg.Size))
-
-    case "bodystructure":
-      body, err := msg.Body()
-      if err != nil {
-        return fmt.Errorf("opening message body: %v", err)
-      }
-      defer body.Close()
-
-      s, err := bodyStructure(body)
-      if err != nil {
-        return fmt.Errorf("building body structure: %v", err)
-      }
-      res.AddString("bodystructure", s)
-
-    case "body[]", "body.peek[]":
-      setSeen = attr.Name == "body[]"
-      body, err := msg.Body()
-      if err != nil {
-        return fmt.Errorf("opening message body: %v", err)
-      }
-      defer body.Close()
-      res.AddReader("body[]", msg.Size, body)
-
-    case "body[text]", "body.peek[text]":
-      setSeen = attr.Name == "body[text]"
-      text, err := msg.Text()
-      if err != nil {
-        return err
-      }
-      defer text.Close()
-      res.AddReader("body[text]", msg.Size, text)
-
-    case "body[header]", "body.peek[header]":
-      setSeen = attr.Name == "body[header]"
-      res.AddLiteral("body[header]", msg.Headers.Format())
-
-    case "body[header.fields]", "body.peek[header.fields]":
-      setSeen = attr.Name == "body[header.fields]"
-      h := msg.Headers.Include(attr.Headers)
-      l := strings.Join(attr.Headers, " ")
-      f := fmt.Sprintf("body[header.fields (%s)]", l)
-      res.AddLiteral(f, h.Format())
-
-    case "body[header.fields.not]", "body.peek[header.fields.not]":
-      setSeen = attr.Name == "body[header.fields.not]"
-      h := msg.Headers.Exclude(attr.Headers)
-      l := strings.Join(attr.Headers, " ")
-      f := fmt.Sprintf("body[header.fields.not (%s)]", l)
-      res.AddLiteral(f, h.Format())
-    }
-  }
-
-  if forceUID {
-    res.AddString("uid", fmt.Sprint(msg.ID))
-  }
-
-  if setSeen {
-    err := f.db.SetFlags(msg.ID, imap.Seen)
+  case imap.StoreAdd:
+    err := f.db.AddFlags(msg.ID, cmd.Flags)
     if err != nil {
-      return fmt.Errorf("database error: setting seen flag: %v", err)
+      return fmt.Errorf("database error: adding flags: %v", err)
+    }
+
+  case imap.StoreRemove:
+    err := f.db.RemoveFlags(msg.ID, cmd.Flags)
+    if err != nil {
+      return fmt.Errorf("database error: adding flags: %v", err)
+    }
+
+  case imap.StoreReplace:
+    // Remove all flags except Recent.
+    var remove []imap.Flag
+    for _, f := range msg.Flags {
+      if f != imap.Recent {
+        remove = append(remove, f)
+      }
+    }
+
+    err := f.db.ReplaceFlags(msg.ID, remove, cmd.Flags)
+    if err != nil {
+      return fmt.Errorf("database error: adding flags: %v", err)
     }
   }
 
-  return res.Encode(f.w)
-}
+  if !cmd.Silent {
+    msg, err := f.db.Message(int(msg.ID))
+    if err != nil {
+      return fmt.Errorf("database error: loading message: %v", err)
+    }
+    res := imap.FetchResult{ID: id}
+    res.AddString("flags", joinFlags(msg.Flags))
 
-func (f *fake) Search(cmd *imap.SearchCommand) {
-}
-
-func (f *fake) Copy(cmd *imap.CopyCommand) {
-}
-
-func (f *fake) Store(cmd *imap.StoreCommand) {
+    err = res.Encode(f.w)
+    if err != nil {
+      return err
+    }
+  }
+  return nil
 }
 
 func (f *fake) Append(cmd *imap.AppendCommand) {
 }
 
+func (f *fake) Copy(cmd *imap.CopyCommand) {
+}
+
 func (f *fake) UIDCopy(cmd *imap.CopyCommand) {
 }
 
-func (f *fake) UIDStore(cmd *imap.StoreCommand) {
-  imap.Complete(f.w, cmd.Tag, "UID STORE")
+func (f *fake) Search(cmd *imap.SearchCommand) {
 }
 
 func (f *fake) UIDSearch(cmd *imap.SearchCommand) {

@@ -90,9 +90,52 @@ func (db *DB) DeleteMailbox(name string) error {
   return err
 }
 
-func (db *DB) SetFlags(id int64, flags ...imap.Flag) error {
+func (db *DB) AddFlags(id int64, flags []imap.Flag) error {
   return db.withTx(func(tx *sql.Tx) error {
     for _, flag := range flags {
+
+      _, err := tx.Exec(
+        "insert or ignore into flag (message_id, value) values (?, ?)",
+        id, flag)
+
+      if err != nil {
+        return err
+      }
+    }
+    return nil
+  })
+}
+
+func (db *DB) RemoveFlags(id int64, flags []imap.Flag) error {
+  return db.withTx(func(tx *sql.Tx) error {
+    for _, flag := range flags {
+
+      _, err := tx.Exec(
+        "delete from flag where message_id = ? and value = ?",
+        id, flag)
+
+      if err != nil {
+        return err
+      }
+    }
+    return nil
+  })
+}
+
+func (db *DB) ReplaceFlags(id int64, remove, add []imap.Flag) error {
+  return db.withTx(func(tx *sql.Tx) error {
+    for _, flag := range remove {
+
+      _, err := tx.Exec(
+        "delete from flag where message_id = ? and value = ?",
+        id, flag)
+
+      if err != nil {
+        return err
+      }
+    }
+
+    for _, flag := range add {
 
       _, err := tx.Exec(
         "insert or ignore into flag (message_id, value) values (?, ?)",
@@ -109,6 +152,7 @@ func (db *DB) SetFlags(id int64, flags ...imap.Flag) error {
 func (db *DB) MessageIDRange(mailbox string, start, end int) ([]*Message, error) {
   var msgs []*Message
 
+  // TODO mailbox isn't needed
   q := `select
     m.id,
     m.size,

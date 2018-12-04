@@ -565,11 +565,6 @@ func base64(r *reader) string {
 	return str
 }
 
-type Sequence struct {
-	Start, End int
-  IsRange bool
-}
-
 func seqSet(r *reader) []Sequence {
 	var seqs []Sequence
 
@@ -742,7 +737,7 @@ func copy_(r *reader, tag string) *CopyCommand {
 	}
 }
 
-func flagList(r *reader) []string {
+func flagList(r *reader) []Flag {
   require(r, "(")
   if discard(r, ')') {
     return nil
@@ -752,17 +747,17 @@ func flagList(r *reader) []string {
 	return f
 }
 
-func flags(r *reader) []string {
-	var list []string
+func flags(r *reader) []Flag {
+	var list []Flag
 
 	for {
     // TODO not true? only system flags have backslash?
     require(r, `\`)
 
     if discard(r, '*') {
-			list = append(list, "*")
+			list = append(list, Flag("\\*"))
 		} else {
-			list = append(list, atom(r))
+			list = append(list, Flag("\\" + atom(r)))
 		}
 
     if !discard(r, ' ') {
@@ -783,21 +778,22 @@ func store(r *reader, tag string) *StoreCommand {
 	seqs := seqSet(r)
 	space(r)
 
-	plusMinus := ""
-	c := r.peek(1)
-	if c == "+" || c == "-" {
-		plusMinus = c
-		r.take(1)
-	}
+  var action StoreAction
+  if discard(r, '+') {
+    action = StoreAdd
+  } else if discard(r, '-') {
+    action = StoreRemove
+  }
 
 	k, ok := keyword(r, "FLAGS", "FLAGS.SILENT")
 	if !ok {
 		fail("expected store flags keyword", r)
 	}
+  silent := k == "FLAGS.SILENT"
 
 	space(r)
 
-	var f []string
+	var f []Flag
 	if r.peek(1) == "(" {
 		f = flagList(r)
 	} else {
@@ -807,9 +803,9 @@ func store(r *reader, tag string) *StoreCommand {
 	crlf(r)
 	return &StoreCommand{
 		Tag:       tag,
-		PlusMinus: plusMinus,
+    Action: action,
+    Silent: silent,
 		Seqs:      seqs,
-		Key:       k,
 		Flags:     f,
 	}
 }

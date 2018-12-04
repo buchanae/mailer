@@ -13,6 +13,11 @@ type CheckCommand struct { Tag string }
 type CloseCommand struct { Tag string }
 type ExpungeCommand struct { Tag string }
 
+type Sequence struct {
+	Start, End int
+  IsRange bool
+}
+
 type UIDFetchCommand struct {
   *FetchCommand
 }
@@ -116,13 +121,20 @@ type CopyCommand struct {
   Seqs []Sequence
 }
 
+type StoreAction int
+const (
+  StoreReplace StoreAction = iota
+  StoreAdd
+  StoreRemove
+)
+
 type StoreCommand struct {
   Tag string
 
-  PlusMinus string
+  Action StoreAction
   Seqs []Sequence
-  Key string
-  Flags []string
+  Silent bool
+  Flags []Flag
 }
 
 type AppendCommand struct {
