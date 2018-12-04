@@ -1,4 +1,4 @@
-package main
+package mailer
 
 import (
   "github.com/buchanae/mailer/imap"

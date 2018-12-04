@@ -1,13 +1,11 @@
-package main
+package mailer
 
 import (
-  "bytes"
   "fmt"
   "log"
   "io"
   "os"
   "crypto/tls"
-  "strings"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
   "github.com/kr/pretty"
@@ -29,7 +27,7 @@ func init() {
 	log.SetFlags(0)
 }
 
-func main() {
+func Run() {
   // TODO maybe have a dev mode that generates a cert automatically
   // https://golang.org/src/crypto/tls/generate_cert.go
   cert, err := tls.LoadX509KeyPair("certificate.pem", "key.pem")
@@ -56,51 +54,61 @@ func main() {
   log.Println("listening on localhost:9855")
 
   // Set up some connection logging.
-  responseLog, err := os.OpenFile("response.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+  connLog, err := os.OpenFile("conn.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
   if err != nil {
     log.Fatal(err)
   }
-  defer responseLog.Close()
+  defer connLog.Close()
 
   for {
     conn, err := ln.Accept()
     if err != nil {
       log.Fatalln("failed to accept", err)
     }
-    go handleConn(conn, db, responseLog)
+    // Set up some connection logging.
+    c := logConn(conn, connLog)
+    go handleConn(c, db)
   }
 }
 
-func handleConn(conn io.ReadWriteCloser, db *model.DB, responseLog io.Writer) {
+func logConn(conn io.ReadWriteCloser, log io.Writer) io.ReadWriteCloser {
+  return &loggedConn{
+    Reader: io.TeeReader(conn, log),
+    Writer: io.MultiWriter(conn, log),
+    Closer: conn,
+  }
+}
+
+type loggedConn struct {
+  io.Reader
+  io.Writer
+  io.Closer
+}
+
+func handleConn(conn io.ReadWriteCloser, db *model.DB) {
   defer conn.Close()
 
-  m := io.MultiWriter(conn, responseLog)
-  all := &bytes.Buffer{}
-  t := io.TeeReader(conn, all)
-
   // Decode IMAP commands from the connection.
-  d := imap.NewCommandDecoder(t)
+  d := imap.NewCommandDecoder(conn)
 
   // Tell the client that the server is ready to begin.
   // TODO probably move to ctrl.Ready() (or Start or whatever)
-  fmt.Fprintf(m, "* OK IMAP4rev1 server ready\r\n")
+  fmt.Fprintf(conn, "* OK IMAP4rev1 server ready\r\n")
 
   // TODO wrap connection to log errors from Write
   //      and maybe silently drop writes after the first error?
-  ctrl := &fake{db: db, w: m}
+  ctrl := &fake{db: db, w: conn}
 
   for ctrl.Ready() && d.Next() {
     // cmd is expected to always be non-nil;
     // if nothing else, it's *imap.UnknownCommand{Tag: "*"}
     cmd := d.Command()
 
-    pretty.Println(all.String())
     pretty.Println("CMD", cmd)
 
     // TODO command handling should probably be async?
     //      but only some commands are async?
     switchCommand(cmd, ctrl)
-    all.Reset()
   }
 
   err := d.Err()
@@ -109,12 +117,13 @@ func handleConn(conn io.ReadWriteCloser, db *model.DB, responseLog io.Writer) {
 
     // Log the line received and the last position of the parser.
     // Useful while writing/debugging the command parser.
-    log.Printf("%s\n", all.String())
-    log.Printf("%s^\n", strings.Repeat(" ", d.LastPos()))
+    // TODO move to parser infrastructure
+    //log.Printf("%s\n", all.String())
+    //log.Printf("%s^\n", strings.Repeat(" ", d.LastPos()))
 
     // IMAP "BAD" is the response for a bad command (unparseable, unrecognized, etc).
     // TODO get last command tag?
-    fmt.Fprintf(m, "* BAD %s\r\n", err)
+    fmt.Fprintf(conn, "* BAD %s\r\n", err)
   }
 }
 
