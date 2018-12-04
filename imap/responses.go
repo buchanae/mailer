@@ -166,13 +166,13 @@ func (s *ExamineResponse) EncodeIMAP(w io.Writer) {
 type StatusResponse struct {
   Tag string
   Mailbox string
-  Counts map[string]int
+  Counts map[StatusAttr]int
 }
 
 func (s *StatusResponse) EncodeIMAP(w io.Writer) {
   var counts []string
   for k, v := range s.Counts {
-    counts = append(counts, fmt.Sprintf("%s %d", k, v))
+    counts = append(counts, fmt.Sprintf("%s %d", string(k), v))
   }
 
   Line(w, "* STATUS %s (%s)", s.Mailbox, strings.Join(counts, " "))
@@ -212,7 +212,7 @@ func (f *FetchResult) Encode(w io.Writer) error {
 
     // if there's a reader, copy an IMAP string literal from that.
     if item.r != nil {
-      fmt.Fprintf(w, "{%d}\r\n")
+      fmt.Fprintf(w, "{%d}\r\n", item.size)
       _, err := io.Copy(w, io.LimitReader(item.r, item.size))
       if err != nil {
         return fmt.Errorf("copying item %s: %v", item.key, err)

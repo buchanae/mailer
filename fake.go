@@ -124,8 +124,80 @@ func (f *fake) Unsubscribe(cmd *imap.UnsubscribeCommand) {
 func (f *fake) Select(cmd *imap.SelectCommand) {
   f.mailbox = cmd.Mailbox
 
+  nextID, err := f.db.NextMessageID()
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
+  exists, err := f.db.MessageCount(cmd.Mailbox)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
+  recent, err := f.db.RecentCount(cmd.Mailbox)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
+  unseen, err := f.db.UnseenCount(cmd.Mailbox)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
+
+  // TODO flags
+
   imap.Encode(f.w, &imap.SelectResponse{
     Tag: cmd.Tag,
+    Exists: exists,
+    Recent: recent,
+    Unseen: unseen,
+    UIDNext: int(nextID),
+    UIDValidity: 1,
+    ReadWrite: true,
+  })
+}
+
+func (f *fake) Examine(cmd *imap.ExamineCommand) {
+  f.mailbox = cmd.Mailbox
+
+  nextID, err := f.db.NextMessageID()
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
+  exists, err := f.db.MessageCount(cmd.Mailbox)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
+  recent, err := f.db.RecentCount(cmd.Mailbox)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
+  unseen, err := f.db.UnseenCount(cmd.Mailbox)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
+  // TODO flags
+
+  imap.Encode(f.w, &imap.ExamineResponse{
+    Tag: cmd.Tag,
+    Exists: exists,
+    Recent: recent,
+    Unseen: unseen,
+    UIDNext: int(nextID),
+    UIDValidity: 1,
   })
 }
 
@@ -135,21 +207,40 @@ func (f *fake) Close(cmd *imap.CloseCommand) {
   imap.Complete(f.w, cmd.Tag, "CLOSE")
 }
 
-func (f *fake) Examine(cmd *imap.ExamineCommand) {
-  imap.Encode(f.w, &imap.ExamineResponse{})
-}
-
 func (f *fake) Status(cmd *imap.StatusCommand) {
-  imap.Encode(f.w, &imap.StatusResponse{
+  resp := &imap.StatusResponse{
     Tag: cmd.Tag,
     Mailbox: cmd.Mailbox,
-    Counts: map[string]int{
-      "MESSAGES": 1,
-      "UIDNEXT": 6,
-      "UIDVALIDITY": 1,
-      "UNSEEN": 0,
-    },
-  })
+    Counts: map[imap.StatusAttr]int{},
+  }
+
+  for _, k := range cmd.Attrs {
+    var err error
+    var num int
+
+    switch k {
+    case imap.MessagesStatus:
+      num, err = f.db.MessageCount(cmd.Mailbox)
+    case imap.RecentStatus:
+      num, err = f.db.RecentCount(cmd.Mailbox)
+    case imap.UIDNextStatus:
+      var n int64
+      n, err = f.db.NextMessageID()
+      num = int(n)
+    case imap.UIDValidityStatus:
+      num = 1
+    case imap.UnseenStatus:
+      num, err = f.db.UnseenCount(cmd.Mailbox)
+    }
+
+    if err != nil {
+      imap.No(f.w, cmd.Tag, "error retrieving status: %v", err)
+      return
+    }
+    resp.Counts[k] = num
+  }
+
+  imap.Encode(f.w, resp)
 }
 
 func (f *fake) Fetch(cmd *imap.FetchCommand) {
@@ -179,7 +270,7 @@ func (f *fake) Fetch(cmd *imap.FetchCommand) {
       id := seq.Start + i
       log.Println("FETCHING MESSAGE", id)
 
-      err := f.fetch(id, msg, cmd)
+      err := f.fetch(id, msg, cmd, false)
       if err != nil {
         imap.No(f.w, cmd.Tag, "error: building fetch result: %v", err)
         // TODO return or continue?
@@ -203,8 +294,8 @@ func (f *fake) UIDFetch(cmd *imap.FetchCommand) {
       return
     }
 
-    for _, msg := range msgs {
-      err := f.fetch(int(msg.ID), msg, cmd)
+    for i, msg := range msgs {
+      err := f.fetch(i, msg, cmd, true)
       if err != nil {
         imap.No(f.w, cmd.Tag, "error: building fetch result: %v", err)
         // TODO return or continue?
@@ -227,7 +318,7 @@ func quoteTime(t time.Time) string {
   return `"` + t.Format(imap.TimeFormat) + `"`
 }
 
-func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand) error {
+func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand, forceUID bool) error {
   res := imap.FetchResult{ID: id}
   setSeen := false
 
@@ -298,7 +389,17 @@ func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand) error {
       res.AddString("rfc822.size", fmt.Sprint(msg.Size))
 
     case "bodystructure":
-      // TODO
+      body, err := msg.Body()
+      if err != nil {
+        return fmt.Errorf("opening message body: %v", err)
+      }
+      defer body.Close()
+
+      s, err := bodyStructure(body)
+      if err != nil {
+        return fmt.Errorf("building body structure: %v", err)
+      }
+      res.AddString("bodystructure", s)
 
     case "body[]", "body.peek[]":
       setSeen = attr.Name == "body[]"
@@ -338,6 +439,10 @@ func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand) error {
     }
   }
 
+  if forceUID {
+    res.AddString("uid", fmt.Sprint(msg.ID))
+  }
+
   if setSeen {
     err := f.db.SetFlags(msg.ID, imap.Seen)
     if err != nil {
@@ -364,6 +469,7 @@ func (f *fake) UIDCopy(cmd *imap.CopyCommand) {
 }
 
 func (f *fake) UIDStore(cmd *imap.StoreCommand) {
+  imap.Complete(f.w, cmd.Tag, "UID STORE")
 }
 
 func (f *fake) UIDSearch(cmd *imap.SearchCommand) {

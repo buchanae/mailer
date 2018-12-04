@@ -6,7 +6,6 @@ import (
   "github.com/buchanae/mailer/imap"
   "github.com/kr/pretty"
   "github.com/spf13/cobra"
-  "net/mail"
   "os"
 )
 
@@ -69,20 +68,8 @@ var createMessage = &cobra.Command{
     }
     defer fh.Close()
 
-    m, err := mail.ReadMessage(fh)
-    if err != nil {
-      return err
-    }
-
-    box, err := db.MailboxByName(args[0])
-    if err != nil {
-      return err
-    }
-
-    return db.CreateMail(box, &model.Message{
-      Flags: []imap.Flag{imap.Recent},
-      Headers: model.Headers(m.Header),
-    }, m.Body)
+    _, err = db.CreateMail(args[0], fh, []imap.Flag{imap.Recent})
+    return err
   },
 }
 

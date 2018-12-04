@@ -83,10 +83,19 @@ type ExamineCommand struct {
   Mailbox string
 }
 
+type StatusAttr string
+const (
+  MessagesStatus StatusAttr = "messages"
+  RecentStatus = "recent"
+  UIDNextStatus = "uidnext"
+  UIDValidityStatus = "uidvalidity"
+  UnseenStatus = "unseen"
+)
+
 type StatusCommand struct {
   Tag string
   Mailbox string
-  Attrs []string
+  Attrs []StatusAttr
 }
 
 type FetchCommand struct {

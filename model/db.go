@@ -2,9 +2,11 @@ package model
 
 import (
   "io"
+  "io/ioutil"
   "time"
   "os"
   "database/sql"
+  "net/mail"
   _ "github.com/mattn/go-sqlite3"
   "fmt"
   "github.com/buchanae/mailer/imap"
@@ -50,7 +52,7 @@ func Open(path string) (*DB, error) {
 	}
 
   // Set up the schema.
-  _, err = db.Exec(schemaSql)
+  _, err = db.Exec(packed)
 	if err != nil {
     return nil, fmt.Errorf("creating database schema: %s", err)
 	}
@@ -111,7 +113,7 @@ func (db *DB) MessageIDRange(mailbox string, start, end int) ([]*Message, error)
     m.id,
     m.size,
     m.created,
-    m.text_path
+    m.path
   from message as m
   join mailbox as b
   on m.mailbox_id = b.id
@@ -133,7 +135,7 @@ func (db *DB) MessageIDRange(mailbox string, start, end int) ([]*Message, error)
 
   for rows.Next() {
     m := &Message{Headers: Headers{}}
-    err := rows.Scan(&m.ID, &m.Size, &m.Created, &m.TextPath)
+    err := rows.Scan(&m.ID, &m.Size, &m.Created, &m.Path)
     if err != nil {
       return nil, fmt.Errorf("loading message: %v", err)
     }
@@ -163,7 +165,7 @@ func (db *DB) MessageRange(mailbox string, offset, limit int) ([]*Message, error
       m.id,
       m.size,
       m.created,
-      m.text_path
+      m.path
     from message as m
     join mailbox as b
     on m.mailbox_id = b.id
@@ -179,7 +181,7 @@ func (db *DB) MessageRange(mailbox string, offset, limit int) ([]*Message, error
 
   for rows.Next() {
     m := &Message{Headers: Headers{}}
-    err := rows.Scan(&m.ID, &m.Size, &m.Created, &m.TextPath)
+    err := rows.Scan(&m.ID, &m.Size, &m.Created, &m.Path)
     if err != nil {
       return nil, fmt.Errorf("loading message: %v", err)
     }
@@ -209,7 +211,7 @@ func (db *DB) Message(id int) (*Message, error) {
     id,
     size,
     created,
-    text_path
+    path
   from message where id = ?`
 
   row := db.db.QueryRow(q, id)
@@ -217,7 +219,7 @@ func (db *DB) Message(id int) (*Message, error) {
     &msg.ID,
     &msg.Size,
     &msg.Created,
-    &msg.TextPath,
+    &msg.Path,
   )
   if err != nil {
     return nil, fmt.Errorf("loading message from database: %v", err)
@@ -322,6 +324,72 @@ func (db *DB) MailboxByName(name string) (*Mailbox, error) {
   return box, nil
 }
 
+func (db *DB) NextMessageID() (int64, error) {
+  var id int64
+  row := db.db.QueryRow("select max(id) from message")
+  err := row.Scan(&id)
+  if err != nil {
+    return 0, fmt.Errorf("database error: getting max message ID: %v", err)
+  }
+  return id, nil
+}
+
+func (db *DB) MessageCount(mailbox string) (int, error) {
+  var count int
+
+  row := db.db.QueryRow(
+    `select count(message.id)
+    from message
+    join mailbox
+    on message.mailbox_id = mailbox.id
+    where mailbox.name = ?`,
+    mailbox)
+
+  err := row.Scan(&count)
+  if err != nil {
+    return 0, fmt.Errorf("database error: getting message count: %v", err)
+  }
+  return count, nil
+}
+
+func (db *DB) RecentCount(mailbox string) (int, error) {
+  var count int
+
+  row := db.db.QueryRow(
+    `select count(message.id)
+    from message
+    join mailbox
+    on message.mailbox_id = mailbox.id
+    where mailbox.name = ?
+    and message.recent = 1`,
+    mailbox)
+
+  err := row.Scan(&count)
+  if err != nil {
+    return 0, fmt.Errorf("database error: getting recent message count: %v", err)
+  }
+  return count, nil
+}
+
+func (db *DB) UnseenCount(mailbox string) (int, error) {
+  var count int
+
+  row := db.db.QueryRow(
+    `select count(message.id)
+    from message
+    join mailbox
+    on message.mailbox_id = mailbox.id
+    where mailbox.name = ?
+    and message.seen = 0`,
+    mailbox)
+
+  err := row.Scan(&count)
+  if err != nil {
+    return 0, fmt.Errorf("database error: getting unseen message count: %v", err)
+  }
+  return count, nil
+}
+
 var errByteLimitReached = fmt.Errorf("max byte limit reached")
 
 // maxReader limits the number of bytes read from the underlying reader "R",
@@ -340,8 +408,18 @@ func (m *maxReader) Read(p []byte) (int, error) {
   return n, err
 }
 
-func (db *DB) CreateMail(box *Mailbox, msg *Message, text io.Reader) error {
-  return db.withTx(func(tx *sql.Tx) error {
+func (db *DB) CreateMail(mailbox string, body io.Reader, flags []imap.Flag) (*Message, error) {
+
+  box, err := db.MailboxByName(mailbox)
+  if err != nil {
+    return nil, err
+  }
+
+  msg := &Message{
+    Flags: flags,
+  }
+
+  dberr := db.withTx(func(tx *sql.Tx) error {
     created := time.Now()
 
     // Insert an empty row in order to get/reserve the next message ID.
@@ -350,7 +428,7 @@ func (db *DB) CreateMail(box *Mailbox, msg *Message, text io.Reader) error {
         mailbox_id,
         size,
         created,
-        text_path
+        path
       ) values (?, ?, ?, ?)`,
       box.ID, 0, created, "")
     if err != nil {
@@ -361,6 +439,33 @@ func (db *DB) CreateMail(box *Mailbox, msg *Message, text io.Reader) error {
     if err != nil {
       return fmt.Errorf("getting inserted mail ID: %v", err)
     }
+
+    // Write the message body to a file.
+
+    // Split the files into groups of 1000.
+    msgDir := filepath.Join(db.path, "messages", fmt.Sprint(msgID / 1000))
+    err = ensureDir(msgDir)
+    if err != nil {
+      return fmt.Errorf("creating message body file: %v", err)
+    }
+
+    msgPath := filepath.Join(msgDir, fmt.Sprint(msgID))
+    fh, err := os.Create(msgPath)
+    if err != nil {
+      return fmt.Errorf("creating message body file: %v", err)
+    }
+    defer fh.Close()
+
+    // Limit the size of the message body.
+    mr := &maxReader{R: body, N: MaxBodyBytes}
+    sr := &sizeReader{R: mr}
+    r := io.TeeReader(sr, fh)
+
+    m, err := mail.ReadMessage(r)
+    if err != nil {
+      return err
+    }
+    msg.Headers = Headers(m.Header)
 
     for key, values := range msg.Headers {
       for _, value := range values {
@@ -386,27 +491,9 @@ func (db *DB) CreateMail(box *Mailbox, msg *Message, text io.Reader) error {
       }
     }
 
-    // Write the message body to a file.
-
-    // Split the files into groups of 1000.
-    msgDir := filepath.Join(db.path, "messages", fmt.Sprint(msgID % 1000))
-    err = ensureDir(msgDir)
-    if err != nil {
-      return fmt.Errorf("creating message body file: %v", err)
-    }
-
-    msgPath := filepath.Join(msgDir, fmt.Sprint(msgID))
-    fh, err := os.Create(msgPath)
-    if err != nil {
-      return fmt.Errorf("creating message body file: %v", err)
-    }
-    defer fh.Close()
-
-    // Limit the size of the message body.
-    mr := &maxReader{R: text, N: MaxBodyBytes}
-
     // Copy the data to the file.
-    size, err := io.Copy(fh, mr)
+    // TODO total size including headers? or size of text only?
+    _, err = io.Copy(ioutil.Discard, r)
     if err != nil {
       os.Remove(msgPath)
       if err == errByteLimitReached {
@@ -417,8 +504,8 @@ func (db *DB) CreateMail(box *Mailbox, msg *Message, text io.Reader) error {
 
     // Save some more information in the database: size, path, etc.
     _, err = tx.Exec(`
-      update message set size = ?, text_path = ? where id = ?
-      `, size, msgPath, msgID)
+      update message set size = ?, path = ? where id = ?
+      `, sr.N, msgPath, msgID)
 
     if err != nil {
       os.Remove(msgPath)
@@ -426,12 +513,17 @@ func (db *DB) CreateMail(box *Mailbox, msg *Message, text io.Reader) error {
     }
 
     msg.ID = msgID
-    msg.Size = size
+    msg.Size = int64(sr.N)
     msg.Created = created
-    msg.TextPath = msgPath
+    msg.Path = msgPath
 
     return nil
   })
+
+  if dberr != nil {
+    return nil, dberr
+  }
+  return msg, nil
 }
 
 func (db *DB) withTx(f func(*sql.Tx) error) error {
@@ -451,4 +543,14 @@ func (db *DB) withTx(f func(*sql.Tx) error) error {
     return fmt.Errorf("failed to commit transaction: %v", commitErr)
   }
   return nil
+}
+
+type sizeReader struct {
+  R io.Reader
+  N int
+}
+func (s *sizeReader) Read(p []byte) (int, error) {
+  n, err := s.R.Read(p)
+  s.N += n
+  return n, err
 }

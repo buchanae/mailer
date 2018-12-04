@@ -6,7 +6,7 @@ import (
   "log"
   "io"
   "net"
-  "os"
+  //"os"
   "strings"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
@@ -57,7 +57,9 @@ func handleConn(conn io.ReadWriteCloser, db *model.DB) {
   defer conn.Close()
 
   // Set up some connection logging.
-  m := io.MultiWriter(conn, os.Stderr)
+  var m io.Writer
+  m = conn
+  //m := io.MultiWriter(conn, os.Stderr)
   all := &bytes.Buffer{}
   t := io.TeeReader(conn, all)
 
@@ -76,6 +78,7 @@ func handleConn(conn io.ReadWriteCloser, db *model.DB) {
     // cmd is expected to always be non-nil;
     // if nothing else, it's *imap.UnknownCommand{Tag: "*"}
     cmd := d.Command()
+
     pretty.Println(all.String())
     pretty.Println("CMD", cmd)
 

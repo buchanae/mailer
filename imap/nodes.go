@@ -5,14 +5,16 @@ type literalNode struct {
   content string
 }
 
+type Partial struct {
+  Offset int
+  Limit int
+}
+
 type FetchAttr struct {
 	Name string
   Headers []string
   Part []int
-  Partial struct {
-    Start int
-    Max int
-  }
+  Partial *Partial
 }
 
 type nstringNode struct {

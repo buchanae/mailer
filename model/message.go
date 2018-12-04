@@ -1,12 +1,12 @@
 package model
 
 import (
-  "bytes"
   "strings"
   "io"
   "fmt"
   "os"
   "time"
+  "net/mail"
   "github.com/buchanae/mailer/imap"
 )
 
@@ -21,7 +21,7 @@ type Message struct {
   Created time.Time
   Flags []imap.Flag
   Headers Headers
-  TextPath string
+  Path string
 }
 
 func (m *Message) SetFlag(flag imap.Flag) {
@@ -42,29 +42,33 @@ func (m *Message) UnsetFlag(flag imap.Flag) {
   }
 }
 
-func (m *Message) Text() (io.ReadCloser, error) {
-  return os.Open(m.TextPath)
+func (m *Message) Body() (io.ReadCloser, error) {
+  return os.Open(m.Path)
 }
 
-func (m *Message) Body() (io.ReadCloser, error) {
-  text, err := m.Text()
+func (m *Message) Text() (io.ReadCloser, error) {
+  body, err := m.Body()
   if err != nil {
     return nil, err
   }
-  h := bytes.NewBufferString(m.Headers.Format())
+
+  msg, err := mail.ReadMessage(body)
+  if err != nil {
+    return nil, err
+  }
   return &bodyCloser{
-    Reader: io.MultiReader(h, text),
-    text: text,
+    Reader: msg.Body,
+    body: body,
   }, nil
 }
 
 type bodyCloser struct {
   io.Reader
-  text io.ReadCloser
+  body io.ReadCloser
 }
 
 func (b *bodyCloser) Close() error {
-  return b.text.Close()
+  return b.body.Close()
 }
 
 type Headers map[string][]string

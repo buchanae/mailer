@@ -528,7 +528,7 @@ func status(r *reader, tag string) *StatusCommand {
 	space(r)
   require(r, "(")
 
-  var attrs []string
+  var attrs []StatusAttr
 
 	for {
 		k, ok := keyword(r, "messages", "recent", "uidnext",
@@ -536,7 +536,7 @@ func status(r *reader, tag string) *StatusCommand {
 		if !ok {
 			fail("parsing status attribute, unknown keyword", r)
 		}
-		attrs = append(attrs, k)
+		attrs = append(attrs, StatusAttr(k))
 
     if !discard(r, ' ') {
       break
@@ -602,18 +602,42 @@ func seqNumber(r *reader) int {
   return n
 }
 
+func partial(r *reader) *Partial {
+  if !discard(r, '<') {
+    return nil
+  }
+
+  offset, ok := number(r)
+  if !ok {
+    fail("expected number", r)
+  }
+
+  if !discard(r, '.') {
+    fail(`expected "."`, r)
+  }
+
+  limit, ok := nzNumber(r)
+  if !ok {
+    fail("expected non-zero number", r)
+  }
+
+  if !discard(r, '>') {
+    fail(`expected ">"`, r)
+  }
+  return &Partial{Offset: offset, Limit: limit}
+}
+
 func section(r *reader, name string) *FetchAttr {
   if !discard(r, '[') {
+    // TODO seems like this should be an error
+    // TODO can you have a partial with no section?
     return &FetchAttr{Name: name + "[]"}
   }
 
   if discard(r, ']') {
-    return &FetchAttr{Name: name + "[]"}
+    return &FetchAttr{Name: name + "[]", Partial: partial(r)}
 	}
 
-  // TODO handle numerical partial of body and body.peek
-  // "BODY" section ["<" number "." nz-number ">"] /
-  // "BODY.PEEK" section ["<" number "." nz-number ">"]
   // TODO also missing section-part
   // section-part    = nz-number *("." nz-number
   // section-spec    = section-msgtext / (section-part ["." section-text])
@@ -634,6 +658,7 @@ func section(r *reader, name string) *FetchAttr {
 	}
 
   require(r, "]")
+  attr.Partial = partial(r)
   return attr
 }
 
@@ -731,6 +756,7 @@ func flags(r *reader) []string {
 	var list []string
 
 	for {
+    // TODO not true? only system flags have backslash?
     require(r, `\`)
 
     if discard(r, '*') {
@@ -739,7 +765,7 @@ func flags(r *reader) []string {
 			list = append(list, atom(r))
 		}
 
-    if discard(r, ' ') {
+    if !discard(r, ' ') {
 			break
 		}
 	}
@@ -778,6 +804,7 @@ func store(r *reader, tag string) *StoreCommand {
 		f = flags(r)
 	}
 
+	crlf(r)
 	return &StoreCommand{
 		Tag:       tag,
 		PlusMinus: plusMinus,
@@ -810,6 +837,7 @@ func search(r *reader, tag string) *SearchCommand {
   }
 
   sk := searchKey(r)
+	crlf(r)
   return &SearchCommand{
     Tag: tag,
     Charset: charset,
