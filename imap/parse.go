@@ -2,10 +2,13 @@ package imap
 
 import (
 	"fmt"
+  "time"
   "io"
 	"strconv"
 	"strings"
 )
+
+// TODO need to disallow NUL \x00
 
 // char is any 7-bit US-ASCII character, excluding NUL.
 var char []string
@@ -184,7 +187,11 @@ func literal(r *reader) *literalNode {
 	}
 	r.take(1)
 
+  // TODO enforce small max size
+
 	crlf(r)
+  // TODO continue on short literals?
+  //r.continue_()
 	// TODO need to disallow NUL \x00
 	s := r.peek(num)
 	r.take(num)
@@ -255,7 +262,7 @@ func command(r *reader) (cmd Command, err error) {
   defer func() {
     if e := recover(); e != nil {
       if x, ok := e.(error); ok {
-        if started {
+        if started && e == io.EOF {
           err = io.ErrUnexpectedEOF
         } else {
           err = x
@@ -346,6 +353,8 @@ func command(r *reader) (cmd Command, err error) {
 		cmd = copy_(r, tag)
 	case "store":
 		cmd = store(r, tag)
+  case "append":
+    cmd = append_(r, tag)
   case "uid":
     cmd = uidcmd(r, tag)
   default:
@@ -354,6 +363,103 @@ func command(r *reader) (cmd Command, err error) {
 
   err = nil
   return
+}
+
+func append_(r *reader, tag string) *AppendCommand {
+	space(r)
+	mailbox := requireAstring(r)
+	space(r)
+
+	var f []Flag
+	if r.peek(1) == "(" {
+		f = flagList(r)
+	  space(r)
+  }
+
+  dt := time.Now()
+  if r.peek(1) == `"` {
+    dt = dateTime(r)
+    space(r)
+  }
+
+  size := requireLiteralHeader(r)
+  // TODO enforce max message size
+
+  msg := &appendMessageReader{
+    left:    size,
+    // TODO this is exposing the reader to code outside the CommandDecoder,
+    //      which could mess with position information unexpectedly?
+    r: r,
+	}
+
+	return &AppendCommand{
+    Tag: tag,
+    Mailbox: mailbox,
+    Flags: f,
+    Created: dt,
+    Message: msg,
+  }
+}
+
+type appendMessageReader struct {
+  // number of bytes remaining
+  left int
+  // has reading started? has the continuation signal been sent?
+  started bool
+  r *reader
+}
+
+func (l *appendMessageReader) Read(p []byte) (int, error) {
+  if !l.started {
+    _, err := fmt.Fprint(l.r, "+\r\n")
+    if err != nil {
+      return 0, fmt.Errorf("sending continuation: %v", err)
+    }
+    l.started = true
+  }
+
+  if l.left == 0 {
+    return 0, io.EOF
+  }
+
+  if len(p) > l.left {
+    p = p[:l.left]
+  }
+
+  n, err := l.r.Read(p)
+  l.left -= n
+  return n, err
+}
+
+func requireLiteralHeader(r *reader) int {
+  require(r, "{")
+
+	num, ok := number(r)
+  if !ok {
+		fail("failed to parse character count from literal", r)
+	}
+
+  require(r, "}")
+	crlf(r)
+  return num
+}
+
+func dateTime(r *reader) time.Time {
+  if !discard(r, '"') {
+    fail("expected double quote", r)
+  }
+
+  s := r.peek(len(TimeFormat))
+  r.take(len(TimeFormat))
+  dt, err := time.Parse(TimeFormat, s)
+  if err != nil {
+    fail(err.Error(), r)
+  }
+
+  if !discard(r, '"') {
+    fail("expected double quote", r)
+  }
+  return dt
 }
 
 func uidcmd(r *reader, tag string) Command {

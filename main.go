@@ -8,7 +8,7 @@ import (
   "crypto/tls"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
-  "github.com/kr/pretty"
+  "github.com/sanity-io/litter"
 )
 
 
@@ -104,7 +104,7 @@ func handleConn(conn io.ReadWriteCloser, db *model.DB) {
     // if nothing else, it's *imap.UnknownCommand{Tag: "*"}
     cmd := d.Command()
 
-    pretty.Println("CMD", cmd)
+    litter.Dump(cmd)
 
     // TODO command handling should probably be async?
     //      but only some commands are async?
@@ -117,9 +117,7 @@ func handleConn(conn io.ReadWriteCloser, db *model.DB) {
 
     // Log the line received and the last position of the parser.
     // Useful while writing/debugging the command parser.
-    // TODO move to parser infrastructure
-    //log.Printf("%s\n", all.String())
-    //log.Printf("%s^\n", strings.Repeat(" ", d.LastPos()))
+    log.Print(d.Debug())
 
     // IMAP "BAD" is the response for a bad command (unparseable, unrecognized, etc).
     // TODO get last command tag?

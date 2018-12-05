@@ -2,6 +2,7 @@ package model
 
 import (
   "io"
+  "strings"
   "io/ioutil"
   "time"
   "os"
@@ -96,7 +97,7 @@ func (db *DB) AddFlags(id int64, flags []imap.Flag) error {
 
       _, err := tx.Exec(
         "insert or ignore into flag (message_id, value) values (?, ?)",
-        id, flag)
+        id, strings.ToLower(string(flag)))
 
       if err != nil {
         return err
@@ -139,7 +140,7 @@ func (db *DB) ReplaceFlags(id int64, remove, add []imap.Flag) error {
 
       _, err := tx.Exec(
         "insert or ignore into flag (message_id, value) values (?, ?)",
-        id, flag)
+        id, strings.ToLower(string(flag)))
 
       if err != nil {
         return err
@@ -447,6 +448,8 @@ func (m *maxReader) Read(p []byte) (int, error) {
   if len(p) > m.N {
     return 0, errByteLimitReached
   }
+  // TODO this could end up slightly more than the max because it checks
+  //      the limit after the read.
   n, err := m.R.Read(p)
   m.N -= n
   return n, err

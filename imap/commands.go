@@ -1,7 +1,18 @@
 package imap
 
+import (
+  "fmt"
+  "io"
+  "io/ioutil"
+  "time"
+)
+
 type Command interface {
   IMAPTag() string
+}
+
+type finisher interface {
+  finish() error
 }
 
 type UnknownCommand struct { Tag string }
@@ -139,6 +150,27 @@ type StoreCommand struct {
 
 type AppendCommand struct {
   Tag string
+  Mailbox string
+  Flags []Flag
+  Created time.Time
+  MessageSize int
+  Message io.Reader
+}
+func (a *AppendCommand) finish() error {
+  _, err := io.Copy(ioutil.Discard, a.Message)
+  if err != nil && err != io.EOF {
+    return err
+  }
+  r := a.Message.(*appendMessageReader)
+
+  s, err := r.r.peekE(2)
+  if err != nil {
+    return err
+  }
+  if s != "\r\n" {
+    return fmt.Errorf("expected CRLF")
+	}
+	return r.r.takeE(2)
 }
 
 func (x *UnknownCommand) IMAPTag() string { return x.Tag }

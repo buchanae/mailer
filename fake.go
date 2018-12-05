@@ -92,7 +92,7 @@ func (f *fake) List(cmd *imap.ListCommand) {
     imap.ListItem(f.w, "", "/", imap.NoSelect)
 
   // TODO there's another common wildcard query: "%"
-  case "*":
+  case "*", "%":
     boxes, err := f.db.ListMailboxes()
     if err != nil {
       imap.No(f.w, cmd.Tag, "database error: listing mailboxes: %v", err)
@@ -240,6 +240,8 @@ func (f *fake) Status(cmd *imap.StatusCommand) {
 }
 
 func (f *fake) Store(cmd *imap.StoreCommand) {
+  // TODO should validate command flags, shouldn't contain recent
+
   for _, seq := range cmd.Seqs {
     // The range can be a single ID, a range of IDs (e.g. 1:100),
     // or a range with a start and no end (e.g. 1:*).
@@ -341,6 +343,12 @@ func (f *fake) store(id int, msg *model.Message, cmd *imap.StoreCommand) error {
 }
 
 func (f *fake) Append(cmd *imap.AppendCommand) {
+  _, err := f.db.CreateMail(cmd.Mailbox, cmd.Message, cmd.Flags)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "creating message: %v", err)
+    return
+  }
+  imap.Complete(f.w, cmd.Tag, "APPEND")
 }
 
 func (f *fake) Copy(cmd *imap.CopyCommand) {
