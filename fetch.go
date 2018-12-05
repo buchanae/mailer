@@ -150,7 +150,7 @@ func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand, forceUI
       if err != nil {
         return fmt.Errorf("building body structure: %v", err)
       }
-      res.AddString("bodystructure", s)
+      res.AddEncoder("bodystructure", s)
 
     case "body[]", "body.peek[]":
       setSeen = attr.Name == "body[]"

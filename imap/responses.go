@@ -182,6 +182,7 @@ func (s *StatusResponse) EncodeIMAP(w io.Writer) {
 type item struct {
   key, value string
   r io.Reader
+  enc Encoder
   size int64
   literal bool
 }
@@ -203,6 +204,10 @@ func (f *FetchResult) AddReader(key string, size int64, r io.Reader) {
   f.items = append(f.items, item{key: key, r: r, size: size})
 }
 
+func (f *FetchResult) AddEncoder(key string, enc Encoder) {
+  f.items = append(f.items, item{key: key, enc: enc})
+}
+
 func (f *FetchResult) Encode(w io.Writer) error {
   fmt.Fprintf(w, "* %d FETCH (", f.ID)
 
@@ -217,7 +222,8 @@ func (f *FetchResult) Encode(w io.Writer) error {
       if err != nil {
         return fmt.Errorf("copying item %s: %v", item.key, err)
       }
-
+    } else if item.enc != nil {
+      item.enc.EncodeIMAP(w)
     } else {
       if item.literal {
         fmt.Fprintf(w, "{%d}\r\n%s", len(item.value), item.value)
@@ -253,4 +259,92 @@ func (r *AuthenticateResponse) EncodeIMAP(w io.Writer) {
 func Logout(w io.Writer, tag string) {
   Line(w, "* BYE IMAP4rev1 Server logging out")
   Complete(w, tag, "LOGOUT")
+}
+
+type Bodystructure interface {
+  Encoder
+  isBodystructure()
+}
+func (*MultipartStructure) isBodystructure() {}
+func (*PartStructure) isBodystructure() {}
+
+type MultipartStructure struct {
+  Subtype string
+  Params map[string]string
+  Parts []*PartStructure
+}
+
+func (m *MultipartStructure) EncodeIMAP(w io.Writer) {
+  fmt.Fprint(w, "(")
+  for _, part := range m.Parts {
+    part.EncodeIMAP(w)
+  }
+  fmt.Fprint(w, " ")
+  stringOr(w, m.Subtype, "NIL")
+  fmt.Fprint(w, " ")
+  paramList(w, m.Params)
+  fmt.Fprint(w, " NIL NIL")
+  fmt.Fprint(w, ")")
+}
+
+func paramList(w io.Writer, params map[string]string) {
+  if params == nil {
+    fmt.Fprint(w, "NIL")
+    return
+  }
+
+  fmt.Fprint(w, "(")
+
+  started := false
+  for k, v := range params {
+    if started {
+      fmt.Fprint(w, " ")
+    }
+    fmt.Fprintf(w, "%q %q", k, v)
+    started = true
+  }
+  fmt.Fprint(w, ")")
+}
+
+func stringOr(w io.Writer, s string, x string) {
+  if s == "" {
+    fmt.Fprint(w, x)
+    return
+  }
+  fmt.Fprintf(w, "%q", s)
+}
+
+type PartStructure struct {
+  Type string
+  Subtype string
+  Params map[string]string
+  ID string
+  Description string
+  Encoding string
+  Size int
+  Lines int
+  MD5 string
+  // TODO Disposition 
+  Language string
+  Location string
+}
+
+func (p *PartStructure) EncodeIMAP(w io.Writer) {
+  fmt.Fprintf(w, "(%q %q ", p.Type, p.Subtype)
+  paramList(w, p.Params)
+  fmt.Fprint(w, " ")
+  stringOr(w, p.ID, "NIL")
+  fmt.Fprint(w, " ")
+  stringOr(w, p.Description, "NIL")
+  fmt.Fprint(w, " ")
+  stringOr(w, p.Encoding, "NIL")
+  fmt.Fprintf(w, " %d %d ", p.Size, p.Lines)
+  stringOr(w, p.MD5, "NIL")
+  fmt.Fprint(w, " ")
+  // TODO disposition
+  fmt.Fprint(w, "NIL")
+  stringOr(w, p.Language, "NIL")
+  fmt.Fprint(w, " ")
+  stringOr(w, p.Location, "NIL")
+  fmt.Fprint(w, ")")
 }
