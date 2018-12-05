@@ -916,38 +916,75 @@ func store(r *reader, tag string) *StoreCommand {
 	}
 }
 
+/*
+search          = "SEARCH" [SP "CHARSET" SP astring] 1*(SP search-key)
+*/
 func search(r *reader, tag string) *SearchCommand {
   space(r)
   var charset string
 
-  _, ok := keyword(r, "charset")
-  if ok {
+  if strings.ToLower(r.peek(len("charset"))) == "charset" {
+    r.take(len("charset"))
     charset = requireAstring(r)
+    space(r)
   }
 
-  if discard(r, ')') {
-    var keys []searchKeyNode
-    for {
-      sk := searchKey(r)
-      keys = append(keys, sk)
-      if !discard(r, ' ') {
-        break
-      }
+  var keys []SearchKey
+  for {
+    sk := searchKey(r)
+    keys = append(keys, sk)
+    if !discard(r, ' ') {
+      break
     }
-    require(r, ")")
-    return &SearchCommand{Charset: charset, Keys: keys}
   }
 
-  sk := searchKey(r)
 	crlf(r)
   return &SearchCommand{
     Tag: tag,
     Charset: charset,
-    Keys: []searchKeyNode{sk},
+    Keys: keys,
   }
 }
 
-func searchKey(r *reader) searchKeyNode {
+func date(r *reader) time.Time {
+  quoted := false
+  if !discard(r, '"') {
+    quoted = true
+  }
+
+  format := "02-Jan-2006"
+  s := r.peek(len(format))
+  r.take(len(format))
+  dt, err := time.Parse(format, s)
+  if err != nil {
+    fail(err.Error(), r)
+  }
+
+  if quoted && !discard(r, '"') {
+    fail("expected double quote", r)
+  }
+  return dt
+}
+
+func searchKeyList(r *reader) SearchKey {
+  require(r, "(")
+  var keys []SearchKey
+  for {
+    k := searchKey(r)
+    keys = append(keys, k)
+    if !discard(r, ' ') {
+      break
+    }
+  }
+  require(r, ")")
+  return &GroupKey{Keys: keys}
+}
+
+func searchKey(r *reader) SearchKey {
+  if r.peek(1) == "(" {
+    return searchKeyList(r)
+  }
+
   k, ok := keyword(r, "all", "answered", "bcc", "before", "body", "cc", "deleted",
     "flagged", "from", "keyword", "new", "old", "on", "recent", "seen", "since",
     "subject", "text", "to", "unanswered", "undeleted", "unflagged", "unkeyword",
@@ -960,51 +997,58 @@ func searchKey(r *reader) searchKeyNode {
   switch k {
   case "all", "answered", "deleted", "flagged", "new", "old", "recent", "seen",
        "unanswered", "undeleted", "unflagged", "unseen", "draft", "undraft":
-    return &simpleSearchKey{k}
+    return &StatusKey{k}
 
-  case "bcc":
+  case "before", "on", "since", "senton", "sentsince":
+    space(r)
+    dt := date(r)
+    return &DateKey{Name: k, Arg: dt}
+
+  case "bcc", "body", "cc", "from", "subject", "text", "to":
+    space(r)
     arg := requireAstring(r)
-    return &bccSearchKey{arg}
-  case "before":
-  case "body":
-    arg := requireAstring(r)
-    return &bodySearchKey{arg}
-  case "cc":
-    arg := requireAstring(r)
-    return &ccSearchKey{arg}
-  case "from":
-    arg := requireAstring(r)
-    return &fromSearchKey{arg}
-  case "keyword":
-  case "on":
-  case "since":
-  case "subject":
-    arg := requireAstring(r)
-    return &subjectSearchKey{arg}
-  case "text":
-    arg := requireAstring(r)
-    return &textSearchKey{arg}
-  case "to":
-    arg := requireAstring(r)
-    return &toSearchKey{arg}
-  case "unkeyword":
+    return &FieldKey{Name: k, Arg: arg}
+
+  case "keyword", "unkeyword":
+    space(r)
+    arg := atom(r)
+    return &FieldKey{Name: k, Arg: arg}
+
   case "header":
-  case "larger":
+    space(r)
+    headerName := requireAstring(r)
+    space(r)
+    arg := requireAstring(r)
+    return &HeaderKey{Name: headerName, Arg: arg}
+
+  case "larger", "smaller":
+    space(r)
+    arg, ok := number(r)
+    if !ok {
+      fail("expected number", r)
+    }
+    return &SizeKey{Name: k, Arg: arg}
+
   case "not":
+    space(r)
     arg := searchKey(r)
-    return &notSearchKey{arg}
+    return &NotKey{Arg: arg}
+
   case "or":
-    arg := searchKey(r)
+    space(r)
+    arg1 := searchKey(r)
     space(r)
     arg2 := searchKey(r)
-    return &orSearchKey{arg, arg2}
-  case "sentbefore":
-  case "senton":
-  case "sentsince":
-  case "smaller":
+    return &OrKey{Arg1: arg1, Arg2: arg2}
+
   case "uid":
+    space(r)
+    arg := seqSet(r)
+    return &UIDKey{Arg: arg}
+
+  default:
+    // TODO try sequence set
   }
-  // TODO sequence-set
   fail("expected search key", r)
   return nil
 }

@@ -123,7 +123,7 @@ type FetchCommand struct {
 type SearchCommand struct {
   Tag string
   Charset string
-  Keys []searchKeyNode
+  Keys []SearchKey
 }
 
 type CopyCommand struct {

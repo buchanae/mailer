@@ -1,5 +1,9 @@
 package imap
 
+import (
+  "time"
+)
+
 type literalNode struct {
   size int
   content string
@@ -26,57 +30,61 @@ type addressNode struct {
   name, adl, mailbox, host *nstringNode
 }
 
-type searchKeyNode interface {
+type SearchKey interface {
   isSearchKey()
 }
 
-type bccSearchKey struct {
-  arg string
+type GroupKey struct {
+  Keys []SearchKey
 }
 
-type bodySearchKey struct {
-  arg string
+type StatusKey struct {
+  Name string
 }
 
-type ccSearchKey struct {
-  arg string
+type FieldKey struct {
+  Name string
+  Arg string
 }
 
-type fromSearchKey struct {
-  arg string
+type OrKey struct {
+  Arg1, Arg2 SearchKey
 }
 
-type toSearchKey struct {
-  arg string
+type NotKey struct {
+  Arg SearchKey
 }
 
-type simpleSearchKey struct {
-  name string
+type HeaderKey struct {
+  Name string
+  Arg string
 }
 
-type subjectSearchKey struct {
-  name string
+type DateKey struct {
+  Name string
+  Arg time.Time
 }
 
-type notSearchKey struct {
-  arg searchKeyNode
+type SizeKey struct {
+  Name string
+  Arg int
 }
 
-type orSearchKey struct {
-  arg1, arg2 searchKeyNode
+type UIDKey struct {
+  Arg []Sequence
 }
 
-type textSearchKey struct {
-  arg string
+type SequenceKey struct {
+  Arg []Sequence
 }
 
-func (*bccSearchKey) isSearchKey() {}
-func (*bodySearchKey) isSearchKey() {}
-func (*ccSearchKey) isSearchKey() {}
-func (*fromSearchKey) isSearchKey() {}
-func (*toSearchKey) isSearchKey() {}
-func (*subjectSearchKey) isSearchKey() {}
-func (*simpleSearchKey) isSearchKey() {}
-func (*textSearchKey) isSearchKey() {}
-func (*notSearchKey) isSearchKey() {}
-func (*orSearchKey) isSearchKey() {}
+func (*FieldKey) isSearchKey() {}
+func (*StatusKey) isSearchKey() {}
+func (*OrKey) isSearchKey() {}
+func (*NotKey) isSearchKey() {}
+func (*HeaderKey) isSearchKey() {}
+func (*DateKey) isSearchKey() {}
+func (*SizeKey) isSearchKey() {}
+func (*UIDKey) isSearchKey() {}
+func (*SequenceKey) isSearchKey() {}
+func (*GroupKey) isSearchKey() {}
