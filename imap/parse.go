@@ -891,11 +891,11 @@ func store(r *reader, tag string) *StoreCommand {
     action = StoreRemove
   }
 
-	k, ok := keyword(r, "FLAGS", "FLAGS.SILENT")
+	k, ok := keyword(r, "flags", "flags.silent")
 	if !ok {
 		fail("expected store flags keyword", r)
 	}
-  silent := k == "FLAGS.SILENT"
+  silent := k == "flags.silent"
 
 	space(r)
 

@@ -68,7 +68,7 @@ var createMessage = &cobra.Command{
     }
     defer fh.Close()
 
-    _, err = db.CreateMail(args[0], fh, []imap.Flag{imap.Recent})
+    _, err = db.CreateMessage(args[0], fh, []imap.Flag{imap.Recent})
     return err
   },
 }

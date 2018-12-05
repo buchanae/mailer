@@ -1,5 +1,6 @@
 create table if not exists message (
-  id integer not null primary key autoincrement,
+  row_id integer not null primary key autoincrement,
+  id integer not null,
   mailbox_id integer not null references mailbox(id) on delete cascade on update cascade,
 
   size integer not null default 0,
@@ -15,6 +16,8 @@ create table if not exists message (
   path text not null default ''
 );
 
+create unique index if not exists message_index on message (id, mailbox_id);
+
 create index if not exists message_seen_index on message (seen);
 create index if not exists message_answered_index on message (answered);
 create index if not exists message_recent_index on message (recent);
@@ -23,7 +26,7 @@ create index if not exists message_draft_index on message (draft);
 create index if not exists message_deleted_index on message (deleted);
 
 create table if not exists header (
-  message_id integer not null references message(id) on delete cascade on update cascade,
+  message_row_id integer not null references message(row_id) on delete cascade on update cascade,
 
   key text not null,
   value text not null
@@ -32,17 +35,18 @@ create table if not exists header (
 create index if not exists header_key_index on header (key);
 
 create table if not exists flag (
-  message_id integer not null references message(id) on delete cascade on update cascade,
+  message_row_id integer not null references message(row_id) on delete cascade on update cascade,
 
-  value text not null,
+  value text not null collate nocase,
 
-  primary key (message_id, value collate nocase)
+  primary key (message_row_id, value)
 );
 
 create table if not exists mailbox (
   id integer not null primary key autoincrement,
+  next_message_id integer not null,
 
-  name text not null,
+  name text not null collate nocase,
 
-  unique (name collate nocase)
+  unique (name)
 );

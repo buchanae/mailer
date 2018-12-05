@@ -4,7 +4,8 @@ package model
 
 var packed = `
 create table if not exists message (
-  id integer not null primary key autoincrement,
+  row_id integer not null primary key autoincrement,
+  id integer not null,
   mailbox_id integer not null references mailbox(id) on delete cascade on update cascade,
 
   size integer not null default 0,
@@ -20,6 +21,8 @@ create table if not exists message (
   path text not null default ''
 );
 
+create unique index if not exists message_index on message (id, mailbox_id);
+
 create index if not exists message_seen_index on message (seen);
 create index if not exists message_answered_index on message (answered);
 create index if not exists message_recent_index on message (recent);
@@ -28,7 +31,7 @@ create index if not exists message_draft_index on message (draft);
 create index if not exists message_deleted_index on message (deleted);
 
 create table if not exists header (
-  message_id integer not null references message(id) on delete cascade on update cascade,
+  message_row_id integer not null references message(row_id) on delete cascade on update cascade,
 
   key text not null,
   value text not null
@@ -37,103 +40,110 @@ create table if not exists header (
 create index if not exists header_key_index on header (key);
 
 create table if not exists flag (
-  message_id integer not null references message(id) on delete cascade on update cascade,
+  message_row_id integer not null references message(row_id) on delete cascade on update cascade,
 
-  value text not null,
+  value text not null collate nocase,
 
-  primary key (message_id, value collate nocase)
+  primary key (message_row_id, value)
 );
 
 create table if not exists mailbox (
   id integer not null primary key autoincrement,
+  next_message_id integer not null,
 
-  name text not null,
+  name text not null collate nocase,
 
-  unique (name collate nocase)
+  unique (name)
 );
+
+create trigger if not exists increment_next_message_id after insert on message
+for each row
+begin
+  update mailbox set next_message_id = next_message_id + 1 where id = new.mailbox_id;
+end;
 
 create trigger if not exists set_seen_index after insert on flag
 for each row
 when new.value = '\seen'
 begin
-  update message set seen = 1 where id = new.message_id;
+  update message set seen = 1 where row_id = new.message_row_id;
 end;
 
 create trigger if not exists set_recent_index after insert on flag
 for each row
 when new.value = '\recent'
 begin
-  update message set recent = 1 where id = new.message_id;
+  update message set recent = 1 where row_id = new.message_row_id;
 end;
 
 create trigger if not exists set_answered_index after insert on flag
 for each row
 when new.value = '\answered'
 begin
-  update message set answered = 1 where id = new.message_id;
+  update message set answered = 1 where row_id = new.message_row_id;
 end;
 
 create trigger if not exists set_flagged_index after insert on flag
 for each row
 when new.value = '\flagged'
 begin
-  update message set flagged = 1 where id = new.message_id;
+  update message set flagged = 1 where row_id = new.message_row_id;
 end;
 
 create trigger if not exists set_draft_index after insert on flag
 for each row
 when new.value = '\draft'
 begin
-  update message set draft = 1 where id = new.message_id;
+  update message set draft = 1 where row_id = new.message_row_id;
 end;
 
 create trigger if not exists set_deleted_index after insert on flag
 for each row
 when new.value = '\deleted'
 begin
-  update message set deleted = 1 where id = new.message_id;
+  update message set deleted = 1 where row_id = new.message_row_id;
 end;
 
 create trigger if not exists unset_seen_index after delete on flag
 for each row
 when old.value = '\seen'
 begin
-  update message set seen = 0 where id = old.message_id;
+  update message set seen = 0 where row_id = old.message_row_id;
 end;
 
 create trigger if not exists unset_recent_index after delete on flag
 for each row
 when old.value = '\recent'
 begin
-  update message set recent = 0 where id = old.message_id;
+  update message set recent = 0 where row_id = old.message_row_id;
 end;
 
 create trigger if not exists unset_answered_index after delete on flag
 for each row
 when old.value = '\answered'
 begin
-  update message set answered = 0 where id = old.message_id;
+  update message set answered = 0 where row_id = old.message_row_id;
 end;
 
 create trigger if not exists unset_flagged_index after delete on flag
 for each row
 when old.value = '\flagged'
 begin
-  update message set flagged = 0 where id = old.message_id;
+  update message set flagged = 0 where row_id = old.message_row_id;
 end;
 
 create trigger if not exists unset_draft_index after delete on flag
 for each row
 when old.value = '\draft'
 begin
-  update message set draft = 0 where id = old.message_id;
+  update message set draft = 0 where row_id = old.message_row_id;
 end;
 
 create trigger if not exists unset_deleted_index after delete on flag
 for each row
 when old.value = '\deleted'
 begin
-  update message set deleted = 0 where id = old.message_id;
+  update message set deleted = 0 where row_id = old.message_row_id;
 end;
 
 `

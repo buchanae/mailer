@@ -13,11 +13,13 @@ import (
 type Mailbox struct {
   ID int
   Name string
+  NextMessageID int
 }
 
 type Message struct {
+  RowID int
   ID int64
-  Size int64
+  Size int
   Created time.Time
   Flags []imap.Flag
   Headers Headers

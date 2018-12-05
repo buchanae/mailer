@@ -91,13 +91,8 @@ func handleConn(conn io.ReadWriteCloser, db *model.DB) {
   // Decode IMAP commands from the connection.
   d := imap.NewCommandDecoder(conn)
 
-  // Tell the client that the server is ready to begin.
-  // TODO probably move to ctrl.Ready() (or Start or whatever)
-  fmt.Fprintf(conn, "* OK IMAP4rev1 server ready\r\n")
-
-  // TODO wrap connection to log errors from Write
-  //      and maybe silently drop writes after the first error?
   ctrl := &fake{db: db, w: conn}
+  ctrl.Start()
 
   for ctrl.Ready() && d.Next() {
     // cmd is expected to always be non-nil;

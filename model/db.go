@@ -2,7 +2,6 @@ package model
 
 import (
   "io"
-  "strings"
   "io/ioutil"
   "time"
   "os"
@@ -15,25 +14,6 @@ import (
 )
 
 const MaxBodyBytes = 10000000
-
-func ensureDir(path string) error {
-  // Check that the data directory exists.
-  s, err := os.Stat(path)
-  if os.IsNotExist(err) {
-    err := os.Mkdir(path, 0700)
-    if err != nil {
-      return fmt.Errorf("creating data directory: %v", err)
-    }
-    return nil
-  } else if err != nil {
-    return fmt.Errorf("checking for data directory: %v", err)
-  }
-
-  if !s.IsDir() {
-    return fmt.Errorf("%q is a file, but mailer needs to put a directory here", path)
-  }
-  return nil
-}
 
 func Open(path string) (*DB, error) {
   err := ensureDir(path)
@@ -76,85 +56,11 @@ func (db *DB) Close() error {
   return db.db.Close()
 }
 
-func (db *DB) CreateMailbox(name string) error {
-  _, err := db.db.Exec("insert into mailbox(name) values(?)", name)
-  return err
-}
-
-func (db *DB) RenameMailbox(from, to string) error {
-  _, err := db.db.Exec("update mailbox set name = ? where name = ?", to, from)
-  return err
-}
-
-func (db *DB) DeleteMailbox(name string) error {
-  _, err := db.db.Exec("delete from mailbox where name = ?", name)
-  return err
-}
-
-func (db *DB) AddFlags(id int64, flags []imap.Flag) error {
-  return db.withTx(func(tx *sql.Tx) error {
-    for _, flag := range flags {
-
-      _, err := tx.Exec(
-        "insert or ignore into flag (message_id, value) values (?, ?)",
-        id, strings.ToLower(string(flag)))
-
-      if err != nil {
-        return err
-      }
-    }
-    return nil
-  })
-}
-
-func (db *DB) RemoveFlags(id int64, flags []imap.Flag) error {
-  return db.withTx(func(tx *sql.Tx) error {
-    for _, flag := range flags {
-
-      _, err := tx.Exec(
-        "delete from flag where message_id = ? and value = ?",
-        id, flag)
-
-      if err != nil {
-        return err
-      }
-    }
-    return nil
-  })
-}
-
-func (db *DB) ReplaceFlags(id int64, remove, add []imap.Flag) error {
-  return db.withTx(func(tx *sql.Tx) error {
-    for _, flag := range remove {
-
-      _, err := tx.Exec(
-        "delete from flag where message_id = ? and value = ?",
-        id, flag)
-
-      if err != nil {
-        return err
-      }
-    }
-
-    for _, flag := range add {
-
-      _, err := tx.Exec(
-        "insert or ignore into flag (message_id, value) values (?, ?)",
-        id, strings.ToLower(string(flag)))
-
-      if err != nil {
-        return err
-      }
-    }
-    return nil
-  })
-}
-
 func (db *DB) MessageIDRange(mailbox string, start, end int) ([]*Message, error) {
   var msgs []*Message
 
-  // TODO mailbox isn't needed
   q := `select
+    m.row_id,
     m.id,
     m.size,
     m.created,
@@ -180,7 +86,7 @@ func (db *DB) MessageIDRange(mailbox string, start, end int) ([]*Message, error)
 
   for rows.Next() {
     m := &Message{Headers: Headers{}}
-    err := rows.Scan(&m.ID, &m.Size, &m.Created, &m.Path)
+    err := rows.Scan(&m.RowID, &m.ID, &m.Size, &m.Created, &m.Path)
     if err != nil {
       return nil, fmt.Errorf("loading message: %v", err)
     }
@@ -207,6 +113,7 @@ func (db *DB) MessageRange(mailbox string, offset, limit int) ([]*Message, error
   var msgs []*Message
   rows, err := db.db.Query(
     `select
+      m.row_id,
       m.id,
       m.size,
       m.created,
@@ -226,7 +133,7 @@ func (db *DB) MessageRange(mailbox string, offset, limit int) ([]*Message, error
 
   for rows.Next() {
     m := &Message{Headers: Headers{}}
-    err := rows.Scan(&m.ID, &m.Size, &m.Created, &m.Path)
+    err := rows.Scan(&m.RowID, &m.ID, &m.Size, &m.Created, &m.Path)
     if err != nil {
       return nil, fmt.Errorf("loading message: %v", err)
     }
@@ -249,18 +156,20 @@ func (db *DB) MessageRange(mailbox string, offset, limit int) ([]*Message, error
   return msgs, nil
 }
 
-func (db *DB) Message(id int) (*Message, error) {
+func (db *DB) Message(rowID int) (*Message, error) {
   msg := &Message{Headers: Headers{}}
 
   q := `select 
+    row_id,
     id,
     size,
     created,
     path
-  from message where id = ?`
+  from message where row_id = ?`
 
-  row := db.db.QueryRow(q, id)
+  row := db.db.QueryRow(q, rowID)
   err := row.Scan(
+    &msg.RowID,
     &msg.ID,
     &msg.Size,
     &msg.Created,
@@ -283,294 +192,177 @@ func (db *DB) Message(id int) (*Message, error) {
   return msg, nil
 }
 
-func (db *DB) loadFlags(msg *Message) error {
-  rows, err := db.db.Query(`select value from flag where message_id = ?`, msg.ID)
+func (db *DB) messageBodyPath(boxID, msgID int) (string, error) {
+  boxDir := filepath.Join(db.path, "messages", fmt.Sprint(boxID))
+  // Split the files into groups of 1000.
+  msgDir := filepath.Join(boxDir, fmt.Sprint(msgID / 1000))
+
+  err := ensureDir(msgDir)
   if err != nil {
-    return fmt.Errorf("loading message flags: %v", err)
+    return "", err
   }
-  defer rows.Close()
 
-  for rows.Next() {
-    var value string
-    err := rows.Scan(&value)
-    if err != nil {
-      return fmt.Errorf("loading message flags: %v", err)
+  msgPath := filepath.Join(msgDir, fmt.Sprint(msgID))
+  return msgPath, nil
+}
+
+func (db *DB) createMessageFile(boxID, msgID int) (*os.File, error) {
+  msgPath, err := db.messageBodyPath(boxID, msgID)
+  if err != nil {
+    return nil, fmt.Errorf("creating message body file: %v", err)
+  }
+
+  // TODO probably should ensure the file doesn't already exist for safety.
+  fh, err := os.Create(msgPath)
+  if err != nil {
+    return nil, fmt.Errorf("creating message body file: %v", err)
+  }
+  return fh, nil
+}
+
+func (db *DB) addHeaders(tx *sql.Tx, rowID int, headers Headers) error {
+  for key, values := range headers {
+    for _, value := range values {
+
+      _, err := tx.Exec(
+        "insert into header(message_row_id, key, value) values (?, ?, ?)",
+        rowID, key, value)
+
+      if err != nil {
+        return fmt.Errorf("inserting header into database: %v", err)
+      }
     }
-    flag := imap.LookupFlag(value)
-    msg.Flags = append(msg.Flags, flag)
-  }
-
-  if err := rows.Err(); err != nil {
-    return fmt.Errorf("loading message flags: %v", err)
   }
   return nil
 }
 
-func (db *DB) loadHeaders(msg *Message) error {
-  rows, err := db.db.Query(`select key, value from header where message_id = ?`, msg.ID)
-  if err != nil {
-    return fmt.Errorf("loading message headers: %v", err)
-  }
-  defer rows.Close()
-
-  for rows.Next() {
-    var key, value string
-    err := rows.Scan(&key, &value)
-    if err != nil {
-      return fmt.Errorf("loading message headers: %v", err)
-    }
-    msg.Headers[key] = append(msg.Headers[key], value)
-  }
-
-  if err := rows.Err(); err != nil {
-    return fmt.Errorf("loading message headers: %v", err)
-  }
-  return nil
-}
-
-func (db *DB) ListMailboxes() ([]*Mailbox, error) {
-
-  var boxes []*Mailbox
-
-  rows, err := db.db.Query("select id, name from mailbox")
-  if err != nil {
-    return nil, fmt.Errorf("loading mailboxes from database: %v", err)
-  }
-  defer rows.Close()
-
-  for rows.Next() {
-    box := &Mailbox{}
-    err := rows.Scan(&box.ID, &box.Name)
-    if err != nil {
-      return nil, fmt.Errorf("loading mailboxes from database: %v", err)
-    }
-    boxes = append(boxes, box)
-  }
-
-  if err := rows.Err(); err != nil {
-    return nil, fmt.Errorf("loading message headers from database: %v", err)
-  }
-
-  return boxes, nil
-}
-
-func (db *DB) MailboxByName(name string) (*Mailbox, error) {
-
-  box := &Mailbox{Name: name}
-  q := "select id from mailbox where name = ?"
-  row := db.db.QueryRow(q, name)
-  err := row.Scan(&box.ID)
-  if err == sql.ErrNoRows {
-    return nil, fmt.Errorf("no mailbox named %q", name)
-  }
-  if err != nil {
-    return nil, fmt.Errorf("finding mailbox by name: %v", err)
-  }
-  return box, nil
-}
-
-func (db *DB) NextMessageID() (int64, error) {
-  var id int64
-  row := db.db.QueryRow("select max(id) from message")
-  err := row.Scan(&id)
-  if err != nil {
-    return 0, fmt.Errorf("database error: getting max message ID: %v", err)
-  }
-  return id, nil
-}
-
-func (db *DB) MessageCount(mailbox string) (int, error) {
-  var count int
-
-  row := db.db.QueryRow(
-    `select count(message.id)
-    from message
-    join mailbox
-    on message.mailbox_id = mailbox.id
-    where mailbox.name = ?`,
-    mailbox)
-
-  err := row.Scan(&count)
-  if err != nil {
-    return 0, fmt.Errorf("database error: getting message count: %v", err)
-  }
-  return count, nil
-}
-
-func (db *DB) RecentCount(mailbox string) (int, error) {
-  var count int
-
-  row := db.db.QueryRow(
-    `select count(message.id)
-    from message
-    join mailbox
-    on message.mailbox_id = mailbox.id
-    where mailbox.name = ?
-    and message.recent = 1`,
-    mailbox)
-
-  err := row.Scan(&count)
-  if err != nil {
-    return 0, fmt.Errorf("database error: getting recent message count: %v", err)
-  }
-  return count, nil
-}
-
-func (db *DB) UnseenCount(mailbox string) (int, error) {
-  var count int
-
-  row := db.db.QueryRow(
-    `select count(message.id)
-    from message
-    join mailbox
-    on message.mailbox_id = mailbox.id
-    where mailbox.name = ?
-    and message.seen = 0`,
-    mailbox)
-
-  err := row.Scan(&count)
-  if err != nil {
-    return 0, fmt.Errorf("database error: getting unseen message count: %v", err)
-  }
-  return count, nil
-}
-
-var errByteLimitReached = fmt.Errorf("max byte limit reached")
-
-// maxReader limits the number of bytes read from the underlying reader "R",
-// and returns an errByteLimitReached if the limit is reached.
-type maxReader struct {
-  R io.Reader // underlying reader
-  N int // max bytes remaining
-}
-
-func (m *maxReader) Read(p []byte) (int, error) {
-  if len(p) > m.N {
-    return 0, errByteLimitReached
-  }
-  // TODO this could end up slightly more than the max because it checks
-  //      the limit after the read.
-  n, err := m.R.Read(p)
-  m.N -= n
-  return n, err
-}
-
-func (db *DB) CreateMail(mailbox string, body io.Reader, flags []imap.Flag) (*Message, error) {
-
-  box, err := db.MailboxByName(mailbox)
-  if err != nil {
-    return nil, err
-  }
-
-  msg := &Message{
-    Flags: flags,
-  }
+func (db *DB) CreateMessage(mailbox string, body io.Reader, flags []imap.Flag) (*Message, error) {
+  var msg *Message
 
   dberr := db.withTx(func(tx *sql.Tx) error {
-    created := time.Now()
 
-    // Insert an empty row in order to get/reserve the next message ID.
-    res, err := tx.Exec(
-      `insert into message(
-        mailbox_id,
-        size,
-        created,
-        path
-      ) values (?, ?, ?, ?)`,
-      box.ID, 0, created, "")
-    if err != nil {
-      return fmt.Errorf("inserting mail into database: %v", err)
-    }
-
-    msgID, err := res.LastInsertId()
-    if err != nil {
-      return fmt.Errorf("getting inserted mail ID: %v", err)
-    }
-
-    // Write the message body to a file.
-
-    // Split the files into groups of 1000.
-    msgDir := filepath.Join(db.path, "messages", fmt.Sprint(msgID / 1000))
-    err = ensureDir(msgDir)
-    if err != nil {
-      return fmt.Errorf("creating message body file: %v", err)
-    }
-
-    msgPath := filepath.Join(msgDir, fmt.Sprint(msgID))
-    fh, err := os.Create(msgPath)
-    if err != nil {
-      return fmt.Errorf("creating message body file: %v", err)
-    }
-    defer fh.Close()
-
-    // Limit the size of the message body.
-    mr := &maxReader{R: body, N: MaxBodyBytes}
-    sr := &sizeReader{R: mr}
-    r := io.TeeReader(sr, fh)
-
-    m, err := mail.ReadMessage(r)
+    boxID, msgID, err := db.nextID(tx, mailbox)
     if err != nil {
       return err
     }
-    msg.Headers = Headers(m.Header)
 
-    for key, values := range msg.Headers {
-      for _, value := range values {
-
-        _, err := tx.Exec(
-          "insert into header(message_id, key, value) values (?, ?, ?)",
-          msgID, key, value)
-
-        if err != nil {
-          return fmt.Errorf("inserting header into database: %v", err)
-        }
-      }
+    fh, err := db.createMessageFile(boxID, msgID)
+    if err != nil {
+      return err
     }
-
-    for _, flag := range msg.Flags {
-
-      _, err := tx.Exec(
-        "insert into flag(message_id, value) values (?, ?)",
-        msgID, flag)
-
+    defer fh.Close()
+    defer func() {
       if err != nil {
-        return fmt.Errorf("database error: inserting flag: %v", err)
+        os.Remove(fh.Name())
       }
-    }
+    }()
 
-    // Copy the data to the file.
-    // TODO total size including headers? or size of text only?
-    _, err = io.Copy(ioutil.Discard, r)
+    headers, size, err := saveMessageBody(body, fh)
     if err != nil {
-      os.Remove(msgPath)
-      if err == errByteLimitReached {
-        return fmt.Errorf("message body is too big. max is %d bytes.", MaxBodyBytes)
-      }
-      return fmt.Errorf("writing message body file: %v", err)
+      return err
     }
 
-    // Save some more information in the database: size, path, etc.
-    _, err = tx.Exec(`
-      update message set size = ?, path = ? where id = ?
-      `, sr.N, msgPath, msgID)
-
+    msg = &Message{
+      ID: int64(msgID),
+      Size: size,
+      Headers: headers,
+      Flags: flags,
+      Created: time.Now(),
+      Path: fh.Name(),
+    }
+    err = db.insertMessage(tx, boxID, msg)
     if err != nil {
-      os.Remove(msgPath)
-      return fmt.Errorf("database error: saving message: %v", err)
+      return fmt.Errorf("database error: inserting message: %v", err)
     }
-
-    msg.ID = msgID
-    msg.Size = int64(sr.N)
-    msg.Created = created
-    msg.Path = msgPath
 
     return nil
   })
 
-  if dberr != nil {
-    return nil, dberr
+  return msg, dberr
+}
+
+func (db *DB) CopyMessage(msg *Message, to string) (*Message, error) {
+  var res *Message
+
+  dberr := db.withTx(func(tx *sql.Tx) error {
+
+    boxID, msgID, err := db.nextID(tx, to)
+    if err != nil {
+      return err
+    }
+
+    path, err := db.messageBodyPath(boxID, msgID)
+    if err != nil {
+      return err
+    }
+    os.Link(msg.Path, path)
+    defer func() {
+      if err != nil {
+        os.Remove(path)
+      }
+    }()
+
+    res = &Message{
+      ID: int64(msgID),
+      Size: msg.Size,
+      Headers: msg.Headers,
+      Flags: msg.Flags,
+      Created: msg.Created,
+      Path: path,
+    }
+    res.SetFlag(imap.Recent)
+
+    err = db.insertMessage(tx, boxID, res)
+    if err != nil {
+      return fmt.Errorf("database error: inserting message: %v", err)
+    }
+    return nil
+  })
+  return res, dberr
+}
+
+func (db *DB) insertMessage(tx *sql.Tx, boxID int, msg *Message) error {
+  // Insert an empty row in order to get/reserve the next message ID.
+  res, err := tx.Exec(`
+    insert into message(
+      id,
+      mailbox_id,
+      size,
+      created,
+      path
+    ) values (?, ?, ?, ?, ?)`,
+    msg.ID, boxID, msg.Size, msg.Created, msg.Path)
+  if err != nil {
+    return fmt.Errorf("inserting mail into database: %v", err)
   }
-  return msg, nil
+
+  rowID, err := res.LastInsertId()
+  if err != nil {
+    return fmt.Errorf("getting inserted mail ID: %v", err)
+  }
+  // TODO need to think carefully about all the int conversions going on
+  msg.RowID = int(rowID)
+
+  err = db.addHeaders(tx, msg.RowID, msg.Headers)
+  if err != nil {
+    return err
+  }
+
+  err = db.addFlags(tx, msg.RowID, msg.Flags)
+  if err != nil {
+    return err
+  }
+  return nil
+}
+
+func (db *DB) nextID(tx *sql.Tx, mailbox string) (boxID, msgID int, err error) {
+  // TODO this is going outside the transaction. how exactly does transaction
+  //      timing work in sqlite? does this block all other transactions from starting?
+  box, err := db.MailboxByName(mailbox)
+  if err != nil {
+    return 0, 0, err
+  }
+  return box.ID, box.NextMessageID, nil
 }
 
 func (db *DB) withTx(f func(*sql.Tx) error) error {
@@ -592,12 +384,29 @@ func (db *DB) withTx(f func(*sql.Tx) error) error {
   return nil
 }
 
-type sizeReader struct {
-  R io.Reader
-  N int
-}
-func (s *sizeReader) Read(p []byte) (int, error) {
-  n, err := s.R.Read(p)
-  s.N += n
-  return n, err
+func saveMessageBody(body io.Reader, out io.Writer) (h Headers, size int, err error) {
+  // Limit the size of the message body.
+  mr := &maxReader{R: body, N: MaxBodyBytes}
+  sr := &sizeReader{R: mr}
+  // tee because we need to parse the headers while copying to the output.
+  r := io.TeeReader(sr, out)
+
+  // Parse the message headers.
+  m, err := mail.ReadMessage(r)
+  if err != nil {
+    return nil, 0, fmt.Errorf("parsing message headers: %v", err)
+  }
+
+  // Copy the data to the file.
+  //
+  // The ioutil.Discard looks weird here, but the TeeReader above copies
+  // data to the output.
+  _, err = io.Copy(ioutil.Discard, r)
+  if err != nil {
+    if err == errByteLimitReached {
+      return nil, 0, fmt.Errorf("message body is too big. max is %d bytes.", MaxBodyBytes)
+    }
+    return nil, 0, fmt.Errorf("writing message body file: %v", err)
+  }
+  return Headers(m.Header), sr.N, nil
 }

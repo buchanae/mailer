@@ -4,11 +4,11 @@ import (
   "fmt"
   "time"
   "strings"
-  "log"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
 )
 
+// TODO maybe fetch shouldn't return deleted messages?
 func (f *fake) Fetch(cmd *imap.FetchCommand) {
   // TODO check connection state. must have a selected mailbox.
 
@@ -32,7 +32,6 @@ func (f *fake) Fetch(cmd *imap.FetchCommand) {
 
     for i, msg := range msgs {
       id := seq.Start + i
-      log.Println("FETCHING MESSAGE", id)
 
       err := f.fetch(id, msg, cmd, false)
       if err != nil {
@@ -195,7 +194,7 @@ func (f *fake) fetch(id int, msg *model.Message, cmd *imap.FetchCommand, forceUI
   }
 
   if setSeen {
-    err := f.db.AddFlags(msg.ID, []imap.Flag{imap.Seen})
+    err := f.db.AddFlags(msg.RowID, []imap.Flag{imap.Seen})
     if err != nil {
       return fmt.Errorf("database error: setting seen flag: %v", err)
     }

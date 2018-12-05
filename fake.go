@@ -14,6 +14,11 @@ type fake struct {
   w io.Writer
 }
 
+func (f *fake) Start() {
+  // Tell the client that the server is ready to begin.
+  imap.Line(f.w, "* OK IMAP4rev1 server ready")
+}
+
 func (f *fake) Ready() bool {
   return !f.done
 }
@@ -122,7 +127,7 @@ func (f *fake) Unsubscribe(cmd *imap.UnsubscribeCommand) {
 func (f *fake) Select(cmd *imap.SelectCommand) {
   f.mailbox = cmd.Mailbox
 
-  nextID, err := f.db.NextMessageID()
+  box, err := f.db.MailboxByName(f.mailbox)
   if err != nil {
     imap.No(f.w, cmd.Tag, "error: %v", err)
     return
@@ -152,8 +157,8 @@ func (f *fake) Select(cmd *imap.SelectCommand) {
     Exists: exists,
     Recent: recent,
     Unseen: unseen,
-    UIDNext: int(nextID),
-    UIDValidity: 1,
+    UIDNext: box.NextMessageID,
+    UIDValidity: box.ID,
     ReadWrite: true,
   })
 }
@@ -161,7 +166,7 @@ func (f *fake) Select(cmd *imap.SelectCommand) {
 func (f *fake) Examine(cmd *imap.ExamineCommand) {
   f.mailbox = cmd.Mailbox
 
-  nextID, err := f.db.NextMessageID()
+  box, err := f.db.MailboxByName(f.mailbox)
   if err != nil {
     imap.No(f.w, cmd.Tag, "error: %v", err)
     return
@@ -192,8 +197,8 @@ func (f *fake) Examine(cmd *imap.ExamineCommand) {
     Exists: exists,
     Recent: recent,
     Unseen: unseen,
-    UIDNext: int(nextID),
-    UIDValidity: 1,
+    UIDNext: box.NextMessageID,
+    UIDValidity: box.ID,
   })
 }
 
@@ -204,6 +209,13 @@ func (f *fake) Close(cmd *imap.CloseCommand) {
 }
 
 func (f *fake) Status(cmd *imap.StatusCommand) {
+
+  box, err := f.db.MailboxByName(cmd.Mailbox)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "error: %v", err)
+    return
+  }
+
   resp := &imap.StatusResponse{
     Tag: cmd.Tag,
     Mailbox: cmd.Mailbox,
@@ -220,11 +232,9 @@ func (f *fake) Status(cmd *imap.StatusCommand) {
     case imap.RecentStatus:
       num, err = f.db.RecentCount(cmd.Mailbox)
     case imap.UIDNextStatus:
-      var n int64
-      n, err = f.db.NextMessageID()
-      num = int(n)
+      num = box.NextMessageID
     case imap.UIDValidityStatus:
-      num = 1
+      num = box.ID
     case imap.UnseenStatus:
       num, err = f.db.UnseenCount(cmd.Mailbox)
     }
@@ -300,13 +310,13 @@ func (f *fake) store(id int, msg *model.Message, cmd *imap.StoreCommand) error {
   switch cmd.Action {
 
   case imap.StoreAdd:
-    err := f.db.AddFlags(msg.ID, cmd.Flags)
+    err := f.db.AddFlags(msg.RowID, cmd.Flags)
     if err != nil {
       return fmt.Errorf("database error: adding flags: %v", err)
     }
 
   case imap.StoreRemove:
-    err := f.db.RemoveFlags(msg.ID, cmd.Flags)
+    err := f.db.RemoveFlags(msg.RowID, cmd.Flags)
     if err != nil {
       return fmt.Errorf("database error: adding flags: %v", err)
     }
@@ -320,14 +330,14 @@ func (f *fake) store(id int, msg *model.Message, cmd *imap.StoreCommand) error {
       }
     }
 
-    err := f.db.ReplaceFlags(msg.ID, remove, cmd.Flags)
+    err := f.db.ReplaceFlags(msg.RowID, remove, cmd.Flags)
     if err != nil {
       return fmt.Errorf("database error: adding flags: %v", err)
     }
   }
 
   if !cmd.Silent {
-    msg, err := f.db.Message(int(msg.ID))
+    msg, err := f.db.Message(msg.RowID)
     if err != nil {
       return fmt.Errorf("database error: loading message: %v", err)
     }
@@ -343,7 +353,7 @@ func (f *fake) store(id int, msg *model.Message, cmd *imap.StoreCommand) error {
 }
 
 func (f *fake) Append(cmd *imap.AppendCommand) {
-  _, err := f.db.CreateMail(cmd.Mailbox, cmd.Message, cmd.Flags)
+  _, err := f.db.CreateMessage(cmd.Mailbox, cmd.Message, cmd.Flags)
   if err != nil {
     imap.No(f.w, cmd.Tag, "creating message: %v", err)
     return
@@ -352,9 +362,59 @@ func (f *fake) Append(cmd *imap.AppendCommand) {
 }
 
 func (f *fake) Copy(cmd *imap.CopyCommand) {
+  for _, seq := range cmd.Seqs {
+    // The range can be a single ID, a range of IDs (e.g. 1:100),
+    // or a range with a start and no end (e.g. 1:*).
+    //
+    // IMAP IDs are 1-based, meaning "1" is the first message (not "0").
+    offset := seq.Start - 1
+    limit := 1
+    if seq.IsRange && seq.End > seq.Start {
+      limit = seq.End - seq.Start + 1
+    }
+
+    // TODO could make this a streaming iterator if needed.
+    msgs, err := f.db.MessageRange(f.mailbox, offset, limit)
+    if err != nil {
+      imap.No(f.w, cmd.Tag, "database error: retrieving message: %v", err)
+      return
+    }
+
+    for _, msg := range msgs {
+      err := f.copy_(msg, cmd)
+      if err != nil {
+        imap.No(f.w, cmd.Tag, "error: copying: %v", err)
+        // TODO return or continue?
+      }
+    }
+  }
+
+  imap.Complete(f.w, cmd.Tag, "COPY")
 }
 
 func (f *fake) UIDCopy(cmd *imap.CopyCommand) {
+  for _, seq := range cmd.Seqs {
+    msgs, err := f.db.MessageIDRange(f.mailbox, seq.Start, seq.End)
+    if err != nil {
+      imap.No(f.w, cmd.Tag, "database error: retrieving message: %v", err)
+      return
+    }
+
+    for _, msg := range msgs {
+      err := f.copy_(msg, cmd)
+      if err != nil {
+        imap.No(f.w, cmd.Tag, "error: copying: %v", err)
+        // TODO return or continue?
+      }
+    }
+  }
+
+  imap.Complete(f.w, cmd.Tag, "UID STORE")
+}
+
+func (f *fake) copy_(msg *model.Message, cmd *imap.CopyCommand) error {
+  _, err := f.db.CopyMessage(msg, cmd.Mailbox)
+  return err
 }
 
 func (f *fake) Search(cmd *imap.SearchCommand) {

@@ -27,6 +27,9 @@ func main() {
 
   fmt.Fprintln(fh, "var packed = `")
   for _, f := range files {
+    if f.Name()[0] == '.' {
+      continue
+    }
     path := filepath.Join("sql", f.Name())
     log.Println("packing:", path)
 
