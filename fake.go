@@ -418,7 +418,26 @@ func (f *fake) copy_(msg *model.Message, cmd *imap.CopyCommand) error {
 }
 
 func (f *fake) Search(cmd *imap.SearchCommand) {
+  // TODO is this possible?
+  if len(cmd.Keys) == 0 {
+    imap.No(f.w, cmd.Tag, "search error: empty search query")
+    return
+  }
+
+  ids, err := f.db.Search(cmd)
+  if err != nil {
+    imap.No(f.w, cmd.Tag, "search error: %v", err)
+    return
+  }
+
+  for _, id := range ids {
+    imap.Line(f.w, "* SEARCH %d", id)
+  }
+
+  imap.Complete(f.w, cmd.Tag, "SEARCH")
 }
 
 func (f *fake) UIDSearch(cmd *imap.SearchCommand) {
+  // TODO what is UID search?
+  f.Search(cmd)
 }

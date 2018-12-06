@@ -4,11 +4,6 @@ import (
   "time"
 )
 
-type literalNode struct {
-  size int
-  content string
-}
-
 type Partial struct {
   Offset int
   Limit int
@@ -19,15 +14,6 @@ type FetchAttr struct {
   Headers []string
   Part []int
   Partial *Partial
-}
-
-type nstringNode struct {
-  isNil bool
-  str string
-}
-
-type addressNode struct {
-  name, adl, mailbox, host *nstringNode
 }
 
 type SearchKey interface {
@@ -71,11 +57,11 @@ type SizeKey struct {
 }
 
 type UIDKey struct {
-  Arg []Sequence
+  Seqs []Sequence
 }
 
 type SequenceKey struct {
-  Arg []Sequence
+  Seqs []Sequence
 }
 
 func (*FieldKey) isSearchKey() {}

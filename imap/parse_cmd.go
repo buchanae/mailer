@@ -579,7 +579,7 @@ func search(r *reader, tag string) *SearchCommand {
   }
 }
 
-func searchKeyList(r *reader) SearchKey {
+func searchKeyGroup(r *reader) SearchKey {
   require(r, "(")
   var keys []SearchKey
   for {
@@ -595,7 +595,7 @@ func searchKeyList(r *reader) SearchKey {
 
 func searchKey(r *reader) SearchKey {
   if peek(r, "(") {
-    return searchKeyList(r)
+    return searchKeyGroup(r)
   }
 
   k := keyword(r)
@@ -604,7 +604,7 @@ func searchKey(r *reader) SearchKey {
        "unanswered", "undeleted", "unflagged", "unseen", "draft", "undraft":
     return &StatusKey{k}
 
-  case "before", "on", "since", "senton", "sentsince":
+  case "before", "on", "since", "sentbefore", "senton", "sentsince":
     space(r)
     dt := date(r)
     return &DateKey{Name: k, Arg: dt}
@@ -649,7 +649,7 @@ func searchKey(r *reader) SearchKey {
   case "uid":
     space(r)
     arg := seqSet(r)
-    return &UIDKey{Arg: arg}
+    return &UIDKey{Seqs: arg}
 
   default:
     // TODO try sequence set

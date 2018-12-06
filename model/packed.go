@@ -33,7 +33,7 @@ create index if not exists message_deleted_index on message (deleted);
 create table if not exists header (
   message_row_id integer not null references message(row_id) on delete cascade on update cascade,
 
-  key text not null,
+  key text not null collate nocase,
   value text not null
 );
 
