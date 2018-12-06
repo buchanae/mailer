@@ -1,0 +1,21 @@
+limiting input, processing, and output:
+- listing mailboxes when lots of mailboxes exist
+- listing messages in a mailbox when lots of messages exist
+- parsing bodystructure of a large message
+  - should preprocess/cache bodystructure
+- copying large messages (already using os.Link)
+- limit length of line read during command during parsing
+  - from rfc2683 "For its part, a server should allow for a command line of at least 8000 octets."
+  - requires switching modes for reading a large literal
+- avoid buffering message content
+- limit amount of data read while parsing headers/envelope
+- make sure flag searches are fast and indexed
+- how to index message bodies?
+- tls/net.conn timeouts should be appropriate. double check all connection config
+- limit max number of connections
+
+
+dev
+- auto generated tls certs
+- log errors
+  - probably need to reorg. the response writing

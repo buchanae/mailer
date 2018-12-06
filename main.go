@@ -1,13 +1,17 @@
 package mailer
 
 import (
+  "bytes"
   "fmt"
+  "net"
   "log"
+  "time"
   "io"
   "os"
   "crypto/tls"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
+  "github.com/buchanae/mailer/smtp"
   "github.com/sanity-io/litter"
 )
 
@@ -45,6 +49,33 @@ func Run() {
     log.Fatalln("failed to open db", err)
   }
   defer db.Close()
+
+  go func() {
+
+    ln, err := tls.Listen("tcp", "localhost:9856", tlsconf)
+    if err != nil {
+      log.Fatalln("failed to listen for smtp", err)
+    }
+    defer ln.Close()
+    log.Println("smtp listening on localhost:9856")
+
+	  srv := &smtp.Server{
+      Handler: func(r net.Addr, from string, to []string, data []byte) {
+        buf := bytes.NewBuffer(data)
+        msg, err := db.CreateMessage("inbox", buf, []imap.Flag{imap.Recent})
+        if err != nil {
+          log.Println("ERROR:", err)
+        }
+        log.Println("MSG:", msg)
+      },
+      Appname: "mailer",
+      Timeout: 5 * time.Minute,
+      Hostname: "localhost",
+      // TODO clean up
+      TLSConfig: tlsconf,
+    }
+    srv.Serve(ln)
+  }()
 
   ln, err := tls.Listen("tcp", "localhost:9855", tlsconf)
   if err != nil {
