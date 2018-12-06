@@ -212,5 +212,5 @@ func joinFlags(flags []imap.Flag) string {
 }
 
 func quoteTime(t time.Time) string {
-  return `"` + t.Format(imap.TimeFormat) + `"`
+  return `"` + t.Format(imap.DateTimeFormat) + `"`
 }

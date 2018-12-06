@@ -1,7 +1,7 @@
 package imap
 
 import (
-  "fmt"
+  "strings"
 )
 
 // except copies a list of strings, excluding some exceptions.
@@ -32,28 +32,55 @@ func contains(list []string, query string) bool {
   return false
 }
 
-// fail panics with an error message containing
-// information about the current position of the reader.
-func fail(msg string, r *reader) {
-  /*
-  pad := strings.Repeat(" ", r.pos)
-  e := fmt.Errorf("error: %s at pos %d\n%s\n%s^\n",
-    msg, r.pos, r.line, pad)
-  */
-  e := fmt.Errorf("error: %s", msg)
-  panic(e)
+func peek(r *reader, s string) bool {
+  x, err := r.peek(len(s))
+  if err != nil {
+    panic(err)
+  }
+  return strings.ToLower(x) == strings.ToLower(s)
 }
 
-// takeStart checks if the reader starts with the given string s;
-// if so, it takes the string and returns true, otherwise it
-// returns false.
-//
-// takeStart is used by most rules to check if the start
-// of the rule matches.
-func takeStart(r *reader, s string) bool {
-  if r.peek(len(s)) == s {
-    r.take(len(s))
+func peekN(r *reader, n int) string {
+  x, err := r.peek(n)
+  if err != nil {
+    panic(err)
+  }
+  return x
+}
+
+func takeN(r *reader, n int) string {
+  s := peekN(r, n)
+  err := r.discard(n)
+  if err != nil {
+    panic(err)
+  }
+  return s
+}
+
+func discard(r *reader, s string) bool {
+  if peek(r, s) {
+    takeN(r, len(s))
     return true
   }
   return false
+}
+
+func takeChars(r *reader, chars []string) (string, bool) {
+	str := ""
+
+	for {
+    c := peekN(r, 1)
+		if !contains(chars, c) {
+			break
+		}
+    takeN(r, 1)
+		str += c
+	}
+	return str, len(str) != 0
+}
+
+func require(r *reader, s string) {
+  if !discard(r, s) {
+    panic("expected " + s)
+  }
 }

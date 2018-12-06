@@ -11,10 +11,6 @@ type Command interface {
   IMAPTag() string
 }
 
-type finisher interface {
-  finish() error
-}
-
 type UnknownCommand struct { Tag string }
 type CapabilityCommand struct { Tag string }
 type LogoutCommand struct { Tag string }
@@ -163,14 +159,14 @@ func (a *AppendCommand) finish() error {
   }
   r := a.Message.(*appendMessageReader)
 
-  s, err := r.r.peekE(2)
+  s, err := r.r.peek(2)
   if err != nil {
     return err
   }
   if s != "\r\n" {
     return fmt.Errorf("expected CRLF")
 	}
-	return r.r.takeE(2)
+	return r.r.discard(2)
 }
 
 func (x *UnknownCommand) IMAPTag() string { return x.Tag }

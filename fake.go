@@ -92,11 +92,11 @@ func (f *fake) Delete(cmd *imap.DeleteCommand) {
 }
 
 func (f *fake) List(cmd *imap.ListCommand) {
+  // TODO mailbox hierarchy is not supported yet
   switch cmd.Query {
   case "":
-    imap.ListItem(f.w, "", "/", imap.NoSelect)
+    imap.ListItem(f.w, "", "", imap.NoSelect)
 
-  // TODO there's another common wildcard query: "%"
   case "*", "%":
     boxes, err := f.db.ListMailboxes()
     if err != nil {
@@ -105,7 +105,7 @@ func (f *fake) List(cmd *imap.ListCommand) {
     }
 
     for _, box := range boxes {
-      imap.ListItem(f.w, box.Name, "/")
+      imap.ListItem(f.w, box.Name, "")
     }
   }
   imap.Complete(f.w, cmd.Tag, "LIST")

@@ -51,8 +51,23 @@ func (s *CommandDecoder) Next() bool {
     }
   }
 
-  s.r.pos = 0
   var err error
+
+  // Peek one character to detect an io.EOF at the beginning.
+  // If EOF is found at the very beginning, return io.EOF.
+  _, err = s.r.peek(1)
+  if err == io.EOF {
+    // Found EOF, which means no command was parsed.
+    s.stopped = true
+    return false
+  }
+  if err != nil {
+    s.stopped = true
+    s.err = err
+    return false
+  }
+
+  s.r.pos = 0
   s.c, err = command(s.r)
 
   if err == io.EOF {
@@ -87,6 +102,14 @@ func (s *CommandDecoder) Debug() string {
   return fmt.Sprintf("%s\n%s^\n", quoted, pad)
 }
 
+// finisher is implemented by commands which need to
+// do more parsing/reading *after* the command handled.
+//
+// See CommandDecoder.Next() for details.
+type finisher interface {
+  finish() error
+}
+
 type reader struct {
   *bufio.Reader
   io.Writer
@@ -108,28 +131,12 @@ func (r *reader) continue_() {
   fmt.Fprint(r.Writer, "+\r\n")
 }
 
-func (r *reader) peek(n int) string {
-  b, err := r.Reader.Peek(n)
-  if err != nil {
-    panic(err)
-  }
-  return string(b)
-}
-
-func (r *reader) take(n int) {
-  x, err := r.Reader.Discard(n)
-  r.pos += x
-  if err != nil {
-    panic(err)
-  }
-}
-
-func (r *reader) peekE(n int) (string, error) {
+func (r *reader) peek(n int) (string, error) {
   b, err := r.Reader.Peek(n)
   return string(b), err
 }
 
-func (r *reader) takeE(n int) error {
+func (r *reader) discard(n int) error {
   x, err := r.Reader.Discard(n)
   r.pos += x
   return err
