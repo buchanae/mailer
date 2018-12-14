@@ -27,6 +27,8 @@ func DefaultServerOpt() ServerOpt {
       Addr: "localhost:25",
     },
     TLS: TLSOpt{
+      Cert: "certificate.pem",
+      Key: "key.pem",
     },
   }
 }
