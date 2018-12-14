@@ -30,14 +30,14 @@ var (
 	mailSizeRE = regexp.MustCompile(`[Ss][Ii][Zz][Ee]=(\d+)`)
 )
 
-// Handler function called upon successful receipt of an email.
-type Handler func(remoteAddr net.Addr, from string, to []string, data []byte)
-
-// HandlerRcpt function called on RCPT. Return accept status.
-type HandlerRcpt func(remoteAddr net.Addr, from string, to string) bool
-
-// AuthHandler function called when a login attempt is performed. Returns true if credentials are correct.
-type AuthHandler func(remoteAddr net.Addr, mechanism string, username []byte, password []byte, shared []byte) (bool, error)
+type Handler interface {
+  // Handler function called upon successful receipt of an email.
+  Mail(remoteAddr net.Addr, from string, to []string, data []byte)
+  // HandlerRcpt function called on RCPT. Return accept status.
+  Rcpt(remoteAddr net.Addr, from string, to string) bool
+  // AuthHandler function called when a login attempt is performed. Returns true if credentials are correct.
+  Auth(remoteAddr net.Addr, mechanism string, username []byte, password []byte, shared []byte) (bool, error)
+}
 
 type maxSizeExceededError struct {
 	limit int
@@ -59,25 +59,33 @@ type LogFunc func(remoteIP, verb, line string)
 // Server is an SMTP server.
 type Server struct {
 	Appname      string
-	AuthHandler  AuthHandler
-	AuthMechs    map[string]bool // Override list of allowed authentication mechanisms. Currently supported: LOGIN, PLAIN, CRAM-MD5. Enabling LOGIN and PLAIN will reduce RFC 4954 compliance.
-	AuthRequired bool            // Require authentication for every command except AUTH, EHLO, HELO, NOOP, RSET or QUIT as per RFC 4954. Ignored if AuthHandler is not configured.
-	Handler      Handler
-	HandlerRcpt  HandlerRcpt
+  Handler      Handler
+  // Override list of allowed authentication mechanisms.
+  // Currently supported: LOGIN, PLAIN, CRAM-MD5.
+  // Enabling LOGIN and PLAIN will reduce RFC 4954 compliance.
+	AuthMechs    map[string]bool
 	Hostname     string
 	LogRead      LogFunc
 	LogWrite     LogFunc
-	MaxSize      int // Maximum message size allowed, in bytes
+  // Maximum message size allowed, in bytes
+	MaxSize      int
 	Timeout      time.Duration
 	TLSConfig    *tls.Config
-  // Listen for incoming TLS connections only (not recommended as it may reduce compatibility). Ignored if TLS is not configured.
+  // Listen for incoming TLS connections only.
+  // Not recommended as it may reduce compatibility.
+  // Ignored if TLS is not configured.
 	TLSOnly  bool
-  // Require TLS for every command except NOOP, EHLO, STARTTLS, or QUIT as per RFC 3207. Ignored if TLS is not configured.
+  // Require TLS for every command except
+  // NOOP, EHLO, STARTTLS, or QUIT as per RFC 3207.
 	TLSRequired  bool
 }
 
 // Serve creates a new SMTP session after a network connection is established.
 func (srv *Server) Serve(ln net.Listener) error {
+  if srv.TLSRequired && srv.TLSConfig == nil {
+    return fmt.Errorf("tls required but tls config is empty")
+  }
+
 	defer ln.Close()
 	for {
 		conn, err := ln.Accept()
@@ -177,7 +185,7 @@ loop:
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
 				break
 			}
-			if s.srv.AuthHandler != nil && s.srv.AuthRequired && !s.authenticated {
+			if !s.authenticated {
 				s.writef("530 5.7.0 Authentication required")
 				break
 			}
@@ -218,7 +226,7 @@ loop:
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
 				break
 			}
-			if s.srv.AuthHandler != nil && s.srv.AuthRequired && !s.authenticated {
+			if !s.authenticated {
 				s.writef("530 5.7.0 Authentication required")
 				break
 			}
@@ -235,10 +243,7 @@ loop:
 				if len(to) == 100 {
 					s.writef("452 4.5.3 Too many recipients")
 				} else {
-					accept := true
-					if s.srv.HandlerRcpt != nil {
-						accept = s.srv.HandlerRcpt(s.conn.RemoteAddr(), from, match[1])
-					}
+				  accept := s.srv.Handler.Rcpt(s.conn.RemoteAddr(), from, match[1])
 					if accept {
 						to = append(to, match[1])
 						s.writef("250 2.1.5 Ok")
@@ -252,7 +257,7 @@ loop:
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
 				break
 			}
-			if s.srv.AuthHandler != nil && s.srv.AuthRequired && !s.authenticated {
+      if !s.authenticated {
 				s.writef("530 5.7.0 Authentication required")
 				break
 			}
@@ -291,9 +296,8 @@ loop:
 			s.writef("250 2.0.0 Ok: queued")
 
 			// Pass mail on to handler.
-			if s.srv.Handler != nil {
-				go s.srv.Handler(s.conn.RemoteAddr(), from, to, buffer.Bytes())
-			}
+      // TODO pass an io.Reader for streaming and remove the goroutine
+			go s.srv.Handler.Mail(s.conn.RemoteAddr(), from, to, buffer.Bytes())
 
 			// Reset for next mail.
 			from = ""
@@ -362,11 +366,6 @@ loop:
 		case "AUTH":
 			if s.srv.TLSConfig != nil && s.srv.TLSRequired && !s.tls {
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
-				break
-			}
-			// Handle case where AUTH is requested but not configured (and therefore not listed as a service extension).
-			if s.srv.AuthHandler == nil {
-				s.writef("502 5.5.1 Command not implemented")
 				break
 			}
 
@@ -561,18 +560,15 @@ func (s *session) makeEHLOResponse() (response string) {
 		response += "250-STARTTLS\r\n"
 	}
 
-	// Only list AUTH if an AuthHandler is configured and at least one mechanism is allowed.
-	if s.srv.AuthHandler != nil {
-		var mechs []string
-		for mech, allowed := range s.authMechs() {
-			if allowed {
-				mechs = append(mechs, mech)
-			}
-		}
-		if len(mechs) > 0 {
-			response += "250-AUTH " + strings.Join(mechs, " ") + "\r\n"
-		}
-	}
+  var mechs []string
+  for mech, allowed := range s.authMechs() {
+    if allowed {
+      mechs = append(mechs, mech)
+    }
+  }
+  if len(mechs) > 0 {
+    response += "250-AUTH " + strings.Join(mechs, " ") + "\r\n"
+  }
 
 	response += "250 ENHANCEDSTATUSCODES"
 	return
@@ -606,7 +602,7 @@ func (s *session) handleAuthLogin(arg string) (bool, error) {
 	}
 
 	// Validate credentials.
-	authenticated, err := s.srv.AuthHandler(s.conn.RemoteAddr(), "LOGIN", username, password, nil)
+	authenticated, err := s.srv.Handler.Auth(s.conn.RemoteAddr(), "LOGIN", username, password, nil)
 
 	return authenticated, err
 }
@@ -634,7 +630,7 @@ func (s *session) handleAuthPlain(arg string) (bool, error) {
 	}
 
 	// Validate credentials.
-	authenticated, err := s.srv.AuthHandler(s.conn.RemoteAddr(), "PLAIN", parts[1], parts[2], nil)
+	authenticated, err := s.srv.Handler.Auth(s.conn.RemoteAddr(), "PLAIN", parts[1], parts[2], nil)
 
 	return authenticated, err
 }
@@ -664,7 +660,7 @@ func (s *session) handleAuthCramMD5() (bool, error) {
 	}
 
 	// Validate credentials.
-	authenticated, err := s.srv.AuthHandler(s.conn.RemoteAddr(), "CRAM-MD5", []byte(fields[0]), []byte(fields[1]), []byte(shared))
+	authenticated, err := s.srv.Handler.Auth(s.conn.RemoteAddr(), "CRAM-MD5", []byte(fields[0]), []byte(fields[1]), []byte(shared))
 
 	return authenticated, err
 }

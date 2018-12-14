@@ -1,9 +1,7 @@
 package mailer
 
 import (
-  "bytes"
   "fmt"
-  "net"
   "log"
   "time"
   "io"
@@ -15,33 +13,20 @@ import (
   "github.com/sanity-io/litter"
 )
 
-
-/*
-Thoughts on continuations and multi-step commands:
-
-- authenticate uses this for challenge/response
-- literals apparently require this
-- when does a client send really large literals?
-  this could be useful to switch to a reader, instead
-  of buffering a 10MB message in memory (with attachments)
-- looks like the IDLE extension sends the continuation
-*/
-
 func init() {
 	log.SetFlags(0)
 }
 
-func Run() {
+func Run(opt ServerOpt) {
   // TODO maybe have a dev mode that generates a cert automatically
   // https://golang.org/src/crypto/tls/generate_cert.go
-  cert, err := tls.LoadX509KeyPair("certificate.pem", "key.pem")
+  cert, err := tls.LoadX509KeyPair(opt.TLS.Cert, opt.TLS.Key)
   if err != nil {
     log.Fatalln("loading TLS certs", err)
   }
 
   tlsconf := &tls.Config{
     Certificates: []tls.Certificate{cert},
-    InsecureSkipVerify: true,
   }
 
   db, err := model.Open("mailer.data")
@@ -52,37 +37,33 @@ func Run() {
 
   go func() {
 
-    ln, err := tls.Listen("tcp", "localhost:9856", tlsconf)
+    ln, err := tls.Listen("tcp", opt.SMTP.Addr, tlsconf)
     if err != nil {
       log.Fatalln("failed to listen for smtp", err)
     }
     defer ln.Close()
-    log.Println("smtp listening on localhost:9856")
+    log.Println("smtp listening on " + opt.SMTP.Addr)
 
 	  srv := &smtp.Server{
-      Handler: func(r net.Addr, from string, to []string, data []byte) {
-        buf := bytes.NewBuffer(data)
-        msg, err := db.CreateMessage("inbox", buf, []imap.Flag{imap.Recent})
-        if err != nil {
-          log.Println("ERROR:", err)
-        }
-        log.Println("MSG:", msg)
-      },
       Appname: "mailer",
       Timeout: 5 * time.Minute,
       Hostname: "localhost",
-      // TODO clean up
       TLSConfig: tlsconf,
+      TLSRequired: true,
     }
-    srv.Serve(ln)
+
+    err = srv.Serve(ln)
+    if err != nil {
+      log.Println("ERROR:", err)
+    }
   }()
 
-  ln, err := tls.Listen("tcp", "localhost:9855", tlsconf)
+  ln, err := tls.Listen("tcp", opt.IMAP.Addr, tlsconf)
   if err != nil {
     log.Fatalln("failed to listen", err)
   }
   defer ln.Close()
-  log.Println("listening on localhost:9855")
+  log.Println("listening on " + opt.IMAP.Addr)
 
   // Set up some connection logging.
   connLog, err := os.OpenFile("conn.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)

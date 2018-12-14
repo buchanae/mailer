@@ -246,6 +246,9 @@ func (db *DB) CreateMessage(mailbox string, body io.Reader, flags []imap.Flag) (
       return err
     }
 
+    // TODO need to ensure that starting a transaction blocks all 
+    //      other transactions from starting, in order to avoid
+    //      races outside of the database (such as filesystem).
     fh, err := db.createMessageFile(boxID, msgID)
     if err != nil {
       return err
