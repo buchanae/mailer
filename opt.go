@@ -59,11 +59,11 @@ func DefaultServerOpt() ServerOpt {
   return ServerOpt{
     DB: DefaultDBOpt(),
     SMTP: SMTPOpt{
-      Addr: "localhost:993",
+      Addr: "localhost:25",
       Timeout: 5 * time.Minute,
     },
     IMAP: IMAPOpt{
-      Addr: "localhost:25",
+      Addr: "localhost:993",
     },
     TLS: TLSOpt{
       Cert: "certificate.pem",
