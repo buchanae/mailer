@@ -9,6 +9,7 @@ import (
 
 type fake struct {
   mailbox string
+  user UserOpt
   db *model.DB
   done bool
   w io.Writer
@@ -40,7 +41,15 @@ func (f *fake) Expunge(cmd *imap.ExpungeCommand) {
 }
 
 func (f *fake) Login(cmd *imap.LoginCommand) {
-  imap.Complete(f.w, cmd.Tag, "LOGIN")
+  if f.user.NoAuth {
+    imap.Complete(f.w, cmd.Tag, "LOGIN")
+    return
+  }
+  if cmd.Username == f.user.Name && cmd.Password == f.user.Password {
+    imap.Complete(f.w, cmd.Tag, "LOGIN")
+    return
+  }
+  imap.No(f.w, cmd.Tag, "auth error: invalid username or password")
 }
 
 func (f *fake) Logout(cmd *imap.LogoutCommand) {

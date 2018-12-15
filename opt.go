@@ -1,6 +1,7 @@
 package mailer
 
 import (
+  "fmt"
   "time"
 )
 
@@ -17,11 +18,31 @@ type DBOpt struct {
   Path string
 }
 
+type UserOpt struct {
+  Name, Password string
+  NoAuth bool
+}
+
+// TODO validate should be allowing multiple errors.
+func (u UserOpt) Validate() error {
+  if u.NoAuth {
+    if u.Name != "" || u.Password != "" {
+      return fmt.Errorf("NoAuth is true, but Name/Password is also set")
+    }
+  } else {
+    if u.Name == "" || u.Password == "" {
+      return fmt.Errorf("Name or Password are empty")
+    }
+  }
+  return nil
+}
+
 type ServerOpt struct {
   SMTP SMTPOpt
   IMAP IMAPOpt
   TLS TLSOpt
   DB DBOpt
+  User UserOpt
 }
 
 type TLSOpt struct {

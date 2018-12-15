@@ -19,6 +19,11 @@ func init() {
 
 func Run(opt ServerOpt) {
 
+  err := opt.User.Validate()
+  if err != nil {
+    log.Fatalf("validating options: user: %v\n", err)
+  }
+
   db, err := model.Open(opt.DB.Path)
   if err != nil {
     log.Fatalln("failed to open db", err)
@@ -69,7 +74,7 @@ func Run(opt ServerOpt) {
     }
     // Set up some connection logging.
     c := logConn(conn, connLog)
-    go handleConn(c, db)
+    go handleConn(c, opt, db)
   }
 }
 
@@ -111,13 +116,17 @@ type loggedConn struct {
   io.Closer
 }
 
-func handleConn(conn io.ReadWriteCloser, db *model.DB) {
+func handleConn(conn io.ReadWriteCloser, opt ServerOpt, db *model.DB) {
   defer conn.Close()
 
   // Decode IMAP commands from the connection.
   d := imap.NewCommandDecoder(conn)
 
-  ctrl := &fake{db: db, w: conn}
+  ctrl := &fake{
+    db: db,
+    w: conn,
+    user: opt.User,
+  }
   ctrl.Start()
 
   for ctrl.Ready() && d.Next() {
