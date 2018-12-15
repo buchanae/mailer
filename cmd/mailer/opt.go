@@ -15,5 +15,6 @@ func DefaultDevServerOpt() DevServerOpt {
   opt.User.NoAuth = true
   opt.User.Name = ""
   opt.User.Password = ""
+  opt.Debug.ConnLog = "conn.log"
   return DevServerOpt(opt)
 }
