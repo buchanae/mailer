@@ -2,14 +2,14 @@ package mailer
 
 import (
   "fmt"
+  "net"
   "log"
-  "time"
   "io"
   "os"
   "crypto/tls"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
-  "github.com/buchanae/mailer/smtp"
+  //"github.com/buchanae/mailer/smtp"
   "github.com/sanity-io/litter"
 )
 
@@ -18,23 +18,14 @@ func init() {
 }
 
 func Run(opt ServerOpt) {
-  // TODO maybe have a dev mode that generates a cert automatically
-  // https://golang.org/src/crypto/tls/generate_cert.go
-  cert, err := tls.LoadX509KeyPair(opt.TLS.Cert, opt.TLS.Key)
-  if err != nil {
-    log.Fatalln("loading TLS certs", err)
-  }
 
-  tlsconf := &tls.Config{
-    Certificates: []tls.Certificate{cert},
-  }
-
-  db, err := model.Open("mailer.data")
+  db, err := model.Open(opt.DB.Path)
   if err != nil {
     log.Fatalln("failed to open db", err)
   }
   defer db.Close()
 
+/*
   go func() {
 
     ln, err := tls.Listen("tcp", opt.SMTP.Addr, tlsconf)
@@ -46,7 +37,8 @@ func Run(opt ServerOpt) {
 
 	  srv := &smtp.Server{
       Appname: "mailer",
-      Timeout: 5 * time.Minute,
+      Timeout: opt.SMTP.Timeout,
+      // TODO
       Hostname: "localhost",
       TLSConfig: tlsconf,
       TLSRequired: true,
@@ -57,11 +49,9 @@ func Run(opt ServerOpt) {
       log.Println("ERROR:", err)
     }
   }()
+*/
 
-  ln, err := tls.Listen("tcp", opt.IMAP.Addr, tlsconf)
-  if err != nil {
-    log.Fatalln("failed to listen", err)
-  }
+  ln := listenIMAP(opt)
   defer ln.Close()
   log.Println("listening on " + opt.IMAP.Addr)
 
@@ -81,6 +71,30 @@ func Run(opt ServerOpt) {
     c := logConn(conn, connLog)
     go handleConn(c, db)
   }
+}
+
+func listenIMAP(opt ServerOpt) net.Listener {
+  ln, err := net.Listen("tcp", opt.IMAP.Addr)
+  if err != nil {
+    log.Fatalln("failed to listen", err)
+  }
+  return ln
+}
+
+func listenIMAPTLS(opt ServerOpt) net.Listener {
+  cert, err := tls.LoadX509KeyPair(opt.TLS.Cert, opt.TLS.Key)
+  if err != nil {
+    log.Fatalln("loading TLS certs", err)
+  }
+
+  tlsconf := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+  }
+  ln, err := tls.Listen("tcp", opt.IMAP.Addr, tlsconf)
+  if err != nil {
+    log.Fatalln("failed to listen", err)
+  }
+  return ln
 }
 
 func logConn(conn io.ReadWriteCloser, log io.Writer) io.ReadWriteCloser {
