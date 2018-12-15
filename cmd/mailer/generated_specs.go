@@ -440,6 +440,13 @@ func (cmd *runSpec) Cmd() *cli.Cmd {
 				DefaultValue: cmd.opt.User.NoAuth,
 				Type:         "bool",
 				Short:        "",
+			}, {
+				Key:          []string{"Debug", "ConnLog"},
+				RawDoc:       "",
+				Value:        &cmd.opt.Debug.ConnLog,
+				DefaultValue: cmd.opt.Debug.ConnLog,
+				Type:         "string",
+				Short:        "",
 			},
 		},
 	}
@@ -531,6 +538,13 @@ func (cmd *runDevSpec) Cmd() *cli.Cmd {
 				Value:        &cmd.opt.User.NoAuth,
 				DefaultValue: cmd.opt.User.NoAuth,
 				Type:         "bool",
+				Short:        "",
+			}, {
+				Key:          []string{"Debug", "ConnLog"},
+				RawDoc:       "",
+				Value:        &cmd.opt.Debug.ConnLog,
+				DefaultValue: cmd.opt.Debug.ConnLog,
+				Type:         "string",
 				Short:        "",
 			},
 		},

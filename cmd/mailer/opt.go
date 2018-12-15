@@ -12,5 +12,8 @@ func DefaultDevServerOpt() DevServerOpt {
   opt := mailer.DefaultServerOpt()
   opt.IMAP.Addr = "localhost:9855"
   opt.SMTP.Addr = "localhost:9856"
+  opt.User.NoAuth = true
+  opt.User.Name = ""
+  opt.User.Password = ""
   return DevServerOpt(opt)
 }

@@ -5,12 +5,10 @@ import (
   "net"
   "log"
   "io"
-  "os"
   "crypto/tls"
   "github.com/buchanae/mailer/model"
   "github.com/buchanae/mailer/imap"
   //"github.com/buchanae/mailer/smtp"
-  "github.com/sanity-io/litter"
 )
 
 func init() {
@@ -61,11 +59,11 @@ func Run(opt ServerOpt) {
   log.Println("listening on " + opt.IMAP.Addr)
 
   // Set up some connection logging.
-  connLog, err := os.OpenFile("conn.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+  connLogger, err := logConnectionToFile(opt.Debug.ConnLog)
   if err != nil {
     log.Fatal(err)
   }
-  defer connLog.Close()
+  defer connLogger.Close()
 
   for {
     conn, err := ln.Accept()
@@ -73,7 +71,7 @@ func Run(opt ServerOpt) {
       log.Fatalln("failed to accept", err)
     }
     // Set up some connection logging.
-    c := logConn(conn, connLog)
+    c := connLogger.Log(conn)
     go handleConn(c, opt, db)
   }
 }
@@ -102,20 +100,6 @@ func listenIMAPTLS(opt ServerOpt) net.Listener {
   return ln
 }
 
-func logConn(conn io.ReadWriteCloser, log io.Writer) io.ReadWriteCloser {
-  return &loggedConn{
-    Reader: io.TeeReader(conn, log),
-    Writer: io.MultiWriter(conn, log),
-    Closer: conn,
-  }
-}
-
-type loggedConn struct {
-  io.Reader
-  io.Writer
-  io.Closer
-}
-
 func handleConn(conn io.ReadWriteCloser, opt ServerOpt, db *model.DB) {
   defer conn.Close()
 
@@ -133,8 +117,6 @@ func handleConn(conn io.ReadWriteCloser, opt ServerOpt, db *model.DB) {
     // cmd is expected to always be non-nil;
     // if nothing else, it's *imap.UnknownCommand{Tag: "*"}
     cmd := d.Command()
-
-    litter.Dump(cmd)
 
     // TODO command handling should probably be async?
     //      but only some commands are async?

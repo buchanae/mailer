@@ -43,6 +43,11 @@ type ServerOpt struct {
   TLS TLSOpt
   DB DBOpt
   User UserOpt
+  Debug DebugOpt
+}
+
+type DebugOpt struct {
+  ConnLog string
 }
 
 type TLSOpt struct {
